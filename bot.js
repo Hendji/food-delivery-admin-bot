@@ -167,22 +167,5 @@ bot.onText(/\/dish (\d+)/, async (msg, match) => {
   }
 });
 
-// Эндпоинт здоровья для Railway
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    bot: 'running',
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Health endpoint на порту ${PORT}`);
-});
-
 console.log('🎉 Бот успешно запущен!');
 console.log('📱 Напишите /start вашему боту в Telegram');
