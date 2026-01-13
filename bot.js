@@ -1,15 +1,14 @@
+// bot.js - с polling для Railway
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const express = require('express');
 
-console.log('🚀 Telegram Bot starting on Railway...');
+console.log('🚀 Telegram Bot starting on Railway (Polling mode)...');
 
 // ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const API_BASE_URL = 'https://food-delivery-api-production-8385.up.railway.app';
-const PORT = process.env.PORT || 3000;
 
 // Validate required env vars
 if (!TELEGRAM_TOKEN) {
@@ -24,33 +23,49 @@ if (!ADMIN_API_KEY) {
 
 console.log('✅ Config loaded');
 console.log('🔗 API Server:', API_BASE_URL);
+console.log('🤖 Bot starting in POLLING mode...');
 
-// ==================== WEBHOOK SETUP ====================
-const app = express();
-app.use(express.json());
+// ==================== CREATE BOT WITH POLLING ====================
+const bot = new TelegramBot(TELEGRAM_TOKEN, {
+  polling: {
+    interval: 3000,  // Poll every 3 seconds
+    autoStart: true,
+    params: {
+      timeout: 30,   // 30 second timeout
+      limit: 100
+    }
+  },
+  request: {
+    timeout: 30000   // 30 second request timeout
+  }
+});
 
-// Get Railway domain
-const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
-const RAILWAY_STATIC_URL = process.env.RAILWAY_STATIC_URL;
+// Handle polling errors gracefully
+bot.on('polling_error', (error) => {
+  console.error('🔴 Polling error:', error.message);
+  
+  // Auto-restart on timeout
+  if (error.message.includes('ESOCKETTIMEDOUT') || error.message.includes('EFATAL')) {
+    console.log('🔄 Auto-restarting polling in 10 seconds...');
+    setTimeout(() => {
+      bot.stopPolling();
+      setTimeout(() => {
+        console.log('🔄 Restarting polling...');
+        bot.startPolling();
+      }, 2000);
+    }, 10000);
+  }
+});
 
-let webhookUrl;
-if (RAILWAY_PUBLIC_DOMAIN) {
-  webhookUrl = `https://${RAILWAY_PUBLIC_DOMAIN}/bot${TELEGRAM_TOKEN}`;
-} else if (RAILWAY_STATIC_URL) {
-  webhookUrl = `${RAILWAY_STATIC_URL}/bot${TELEGRAM_TOKEN}`;
-} else {
-  console.error('❌ No Railway domain found!');
-  process.exit(1);
-}
-
-console.log('🌐 Webhook URL:', webhookUrl);
-
-// Create bot
-const bot = new TelegramBot(TELEGRAM_TOKEN);
+bot.on('error', (error) => {
+  console.error('🔴 Bot error:', error.message);
+});
 
 // ==================== API HELPER ====================
 async function callAdminAPI(endpoint, method = 'GET') {
   try {
+    console.log(`📡 API call: ${method} ${endpoint}`);
+    
     const response = await axios({
       method,
       url: `${API_BASE_URL}${endpoint}`,
@@ -60,9 +75,10 @@ async function callAdminAPI(endpoint, method = 'GET') {
       },
       timeout: 10000
     });
+    
     return response.data;
   } catch (error) {
-    console.error('API Error:', error.message);
+    console.error('❌ API Error:', error.message);
     throw error;
   }
 }
@@ -71,14 +87,19 @@ async function callAdminAPI(endpoint, method = 'GET') {
 
 // /start
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id,
+  const chatId = msg.chat.id;
+  console.log(`👋 Start from ${chatId}`);
+  
+  bot.sendMessage(chatId,
     '🤖 *Food Delivery Admin Bot*\n\n' +
-    'Commands:\n' +
-    '• /toggle [id] - Toggle dish availability\n' +
-    '• /dish [id] - Show dish info\n' +
+    '✅ Connected to API\n' +
+    '🔗 ' + API_BASE_URL + '\n\n' +
+    '📋 *Commands:*\n' +
+    '• /toggle [id] - Toggle dish\n' +
+    '• /dish [id] - Dish info\n' +
     '• /restaurants - List restaurants\n' +
     '• /help - Help\n\n' +
-    'Examples:\n' +
+    '📝 *Examples:*\n' +
     '/toggle 1\n' +
     '/dish 1',
     { parse_mode: 'Markdown' }
@@ -87,35 +108,57 @@ bot.onText(/\/start/, (msg) => {
 
 // /toggle [id]
 bot.onText(/\/toggle (\d+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
   const dishId = match[1];
   
   try {
+    await bot.sendChatAction(chatId, 'typing');
     const result = await callAdminAPI(`/bot/dish/${dishId}/toggle`, 'POST');
-    bot.sendMessage(msg.chat.id, `✅ ${result.message}`);
+    
+    const status = result.dish.is_available ? '✅ Available' : '❌ Unavailable';
+    bot.sendMessage(chatId,
+      `🔄 *Status Changed*\n\n` +
+      `🍽️ ${result.dish.name}\n` +
+      `🏪 ${result.dish.restaurant_name}\n\n` +
+      `📊 New status: ${status}\n\n` +
+      `🔍 View: /dish ${dishId}`,
+      { parse_mode: 'Markdown' }
+    );
   } catch (error) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${error.response?.data?.error || error.message}`);
+    bot.sendMessage(chatId,
+      `❌ *Error*\n\n` +
+      `${error.response?.data?.error || error.message}`,
+      { parse_mode: 'Markdown' }
+    );
   }
 });
 
 // /dish [id]
 bot.onText(/\/dish (\d+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
   const dishId = match[1];
   
   try {
+    await bot.sendChatAction(chatId, 'typing');
     const result = await callAdminAPI(`/bot/dish/${dishId}`);
     const dish = result.dish;
     
     const status = dish.is_available ? '✅ Available' : '❌ Unavailable';
-    bot.sendMessage(msg.chat.id,
+    bot.sendMessage(chatId,
       `🍽️ *${dish.name}*\n\n` +
       `💰 ${dish.price} ₽\n` +
       `📊 ${status}\n` +
-      `🏪 ${dish.restaurant_name}\n\n` +
-      `Toggle: /toggle ${dishId}`,
+      `🏪 ${dish.restaurant_name}\n` +
+      `⏱️ ${dish.preparation_time} min\n\n` +
+      `🔄 Toggle: /toggle ${dishId}`,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${error.response?.data?.error || error.message}`);
+    bot.sendMessage(chatId,
+      `❌ *Error*\n\n` +
+      `${error.response?.data?.error || error.message}`,
+      { parse_mode: 'Markdown' }
+    );
   }
 });
 
@@ -123,45 +166,82 @@ bot.onText(/\/dish (\d+)/, async (msg, match) => {
 bot.onText(/\/help/, (msg) => {
   bot.sendMessage(msg.chat.id,
     '📋 *Help*\n\n' +
-    '*/toggle [id]* - Toggle dish\n' +
-    '*/dish [id]* - Dish info\n' +
-    '*/restaurants* - List restaurants\n\n' +
-    'Example: /toggle 1',
+    '*/toggle [id]* - Toggle dish availability\n' +
+    '*/dish [id]* - Show dish information\n' +
+    '*/restaurants* - List all restaurants\n\n' +
+    '*Examples:*\n' +
+    '/toggle 1\n' +
+    '/dish 2\n' +
+    '/restaurants',
     { parse_mode: 'Markdown' }
   );
 });
 
-// ==================== WEBHOOK ENDPOINT ====================
-app.post(`/bot${TELEGRAM_TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-// ==================== HEALTH CHECK ====================
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'telegram-bot',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ==================== START SERVER ====================
-app.listen(PORT, async () => {
-  console.log(`✅ Server running on port ${PORT}`);
+// /restaurants
+bot.onText(/\/restaurants/, async (msg) => {
+  const chatId = msg.chat.id;
   
   try {
-    // Set webhook
-    await bot.setWebHook(webhookUrl);
-    console.log('✅ Webhook set');
+    await bot.sendChatAction(chatId, 'typing');
+    const restaurants = await callAdminAPI('/restaurants');
     
-    // Get bot info
-    const botInfo = await bot.getMe();
-    console.log(`🤖 Bot: @${botInfo.username} (${botInfo.first_name})`);
+    let message = `🏪 *Restaurants*\n\n`;
     
-    console.log('🎉 Bot is ready!');
+    restaurants.forEach(rest => {
+      message += 
+        `*${rest.name}*\n` +
+        `⭐ ${rest.rating || 'No rating'}\n` +
+        `🚚 ${rest.delivery_time}\n` +
+        `💰 ${rest.delivery_price}\n` +
+        `📋 /menu_${rest.id}\n\n`;
+    });
     
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
   } catch (error) {
-    console.error('❌ Failed to start bot:', error.message);
+    bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+  }
+});
+
+// Quick commands
+bot.onText(/\/dish_(\d+)/, (msg, match) => {
+  msg.text = `/dish ${match[1]}`;
+  bot.processUpdate({ message: msg });
+});
+
+bot.onText(/\/toggle_(\d+)/, (msg, match) => {
+  msg.text = `/toggle ${match[1]}`;
+  bot.processUpdate({ message: msg });
+});
+
+// ==================== HEALTH CHECK SERVER ====================
+// Simple HTTP server for Railway health checks
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'telegram-bot',
+      mode: 'polling',
+      timestamp: new Date().toISOString(),
+      api: API_BASE_URL
+    }));
+  } else {
+    res.writeHead(200);
+    res.end('🤖 Telegram Bot is running in polling mode');
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`✅ Health server on port ${PORT}`);
+  console.log('🎉 Bot is ready! Send /start to your bot');
+});
+
+// Log messages
+bot.on('message', (msg) => {
+  if (msg.text && !msg.text.startsWith('/')) {
+    console.log(`💬 Message from ${msg.chat.id}: "${msg.text.substring(0, 50)}..."`);
   }
 });
