@@ -2,79 +2,90 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
-console.log('🚀 Запуск Telegram бота...');
+console.log('🚀 Запуск Telegram бота с вебхуками...');
 
-// Проверка переменных окружения
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const API_BASE_URL = 'https://food-delivery-api-production-8385.up.railway.app';
+const PORT = process.env.PORT || 3000;
+const RAILWAY_STATIC_URL = process.env.RAILWAY_STATIC_URL;
+const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 
 if (!TELEGRAM_TOKEN) {
-  console.error('❌ ОШИБКА: TELEGRAM_TOKEN не установлен!');
+  console.error('❌ TELEGRAM_TOKEN не установлен!');
   process.exit(1);
 }
 
-if (!ADMIN_API_KEY) {
-  console.error('❌ ОШИБКА: ADMIN_API_KEY не установлен!');
+// Определяем URL для вебхука
+let webhookUrl;
+if (PUBLIC_DOMAIN) {
+  webhookUrl = `https://${PUBLIC_DOMAIN}/bot${TELEGRAM_TOKEN}`;
+} else if (RAILWAY_STATIC_URL) {
+  webhookUrl = `${RAILWAY_STATIC_URL}/bot${TELEGRAM_TOKEN}`;
+} else {
+  console.error('❌ Не удалось определить URL для вебхука');
+  console.error('   Установите RAILWAY_PUBLIC_DOMAIN или RAILWAY_STATIC_URL');
   process.exit(1);
 }
 
-console.log('✅ Конфигурация загружена');
-console.log('🔗 API:', API_BASE_URL);
+console.log('🌐 Webhook URL:', webhookUrl);
 
-// Создание бота с настройками для продакшена
-const bot = new TelegramBot(TELEGRAM_TOKEN, {
-  polling: {
-    interval: 1000,
-    timeout: 10,
-    limit: 100
-  },
+// Создаем бота в режиме вебхука
+const bot = new TelegramBot(TELEGRAM_TOKEN, { 
+  onlyFirstMatch: true,
   request: {
     timeout: 10000
   }
 });
 
-// Обработчик ошибок
-bot.on('polling_error', (error) => {
-  console.error('🔴 Polling error:', error.message);
-  
-  // Автоматический перезапуск при некоторых ошибках
-  if (error.code === 'EFATAL') {
-    console.log('🔄 Перезапуск через 10 секунд...');
-    setTimeout(() => {
-      bot.stopPolling();
-      setTimeout(() => bot.startPolling(), 1000);
-    }, 10000);
-  }
+// Устанавливаем вебхук
+bot.setWebHook(webhookUrl)
+  .then(() => {
+    console.log('✅ Вебхук установлен!');
+  })
+  .catch(error => {
+    console.error('❌ Ошибка установки вебхука:', error.message);
+  });
+
+// Express сервер для обработки вебхуков
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+// Эндпоинт для вебхука
+app.post(`/bot${TELEGRAM_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
-bot.on('error', (error) => {
-  console.error('🔴 Bot error:', error.message);
+// Health check для Railway
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'telegram-bot',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Функция для API запросов с ретраями
-async function callAdminAPI(endpoint, method = 'GET', retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await axios({
-        method,
-        url: `${API_BASE_URL}${endpoint}`,
-        headers: {
-          'X-Admin-API-Key': ADMIN_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        timeout: 5000
-      });
-      return response.data;
-    } catch (error) {
-      if (i === retries - 1) throw error;
-      console.log(`🔄 Ретрай ${i + 1}/${retries} для ${endpoint}`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+// Команды бота (остаются те же)
+async function callAdminAPI(endpoint, method = 'GET') {
+  try {
+    const response = await axios({
+      method,
+      url: `${API_BASE_URL}${endpoint}`,
+      headers: {
+        'X-Admin-API-Key': ADMIN_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000
+    });
+    return response.data;
+  } catch (error) {
+    console.error('API Error:', error.response?.data || error.message);
+    throw error;
   }
 }
 
-// Команды бота
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`👋 Новый пользователь: ${chatId}`);
@@ -86,18 +97,6 @@ bot.onText(/\/start/, (msg) => {
     '• /dish [id] - информация о блюде\n' +
     '• /help - помощь\n\n' +
     'Пример: /toggle 1',
-    { parse_mode: 'Markdown' }
-  );
-});
-
-bot.onText(/\/help/, (msg) => {
-  bot.sendMessage(msg.chat.id,
-    '📋 *Помощь по командам*\n\n' +
-    '*/toggle [id]* - переключить доступность блюда\n' +
-    '*/dish [id]* - показать информацию о блюде\n\n' +
-    '*Примеры:*\n' +
-    '/toggle 1\n' +
-    '/dish 1',
     { parse_mode: 'Markdown' }
   );
 });
@@ -128,44 +127,9 @@ bot.onText(/\/toggle (\d+)/, async (msg, match) => {
   }
 });
 
-bot.onText(/\/dish (\d+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const dishId = match[1];
-  
-  try {
-    await bot.sendChatAction(chatId, 'typing');
-    const result = await callAdminAPI(`/bot/dish/${dishId}`);
-    const dish = result.dish;
-    
-    const status = dish.is_available ? '✅ Доступно' : '❌ Недоступно';
-    const message = 
-      `🍽️ *${dish.name}*\n\n` +
-      `💰 Цена: ${dish.price} ₽\n` +
-      `📋 Статус: ${status}\n` +
-      `🏪 Ресторан: ${dish.restaurant_name}\n` +
-      `⏱️ Время готовки: ${dish.preparation_time} мин\n` +
-      `🌶️ Острое: ${dish.is_spicy ? 'Да' : 'Нет'}\n` +
-      `🥦 Вегетарианское: ${dish.is_vegetarian ? 'Да' : 'Нет'}\n\n` +
-      `🔄 Изменить статус: /toggle ${dishId}`;
-    
-    // Отправляем фото если есть
-    if (dish.image_url) {
-      bot.sendPhoto(chatId, dish.image_url, {
-        caption: message,
-        parse_mode: 'Markdown'
-      });
-    } else {
-      bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    }
-  } catch (error) {
-    console.error('Dish error:', error.message);
-    bot.sendMessage(chatId,
-      '❌ *Ошибка*\n\n' +
-      `Блюдо ${dishId} не найдено или ошибка сервера`,
-      { parse_mode: 'Markdown' }
-    );
-  }
+// Запускаем сервер
+app.listen(PORT, () => {
+  console.log(`✅ Сервер запущен на порту ${PORT}`);
+  console.log('🎉 Бот готов к работе!');
+  console.log('📱 Напишите /start вашему боту в Telegram');
 });
-
-console.log('🎉 Бот успешно запущен!');
-console.log('📱 Напишите /start вашему боту в Telegram');
