@@ -1,70 +1,63 @@
+// bot.js - запускать ОТДЕЛЬНО
+require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-require('dotenv').config();
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
-const API_BASE_URL = process.env.API_BASE_URL;
+const API_BASE_URL = 'https://food-delivery-api-production-8385.up.railway.app'; // Ваш Railway API
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Функция для вызова API
-async function callAdminAPI(endpoint, method = 'GET', data = null) {
+async function callAdminAPI(endpoint, method = 'GET') {
     try {
         const response = await axios({
             method,
             url: `${API_BASE_URL}${endpoint}`,
             headers: {
-                'X-Admin-API-Key': ADMIN_API_KEY
-            },
-            data
+                'X-Admin-API-Key': ADMIN_API_KEY,
+                'Content-Type': 'application/json'
+            }
         });
         return response.data;
     } catch (error) {
-        console.error('API Error:', error.message);
+        console.error('API Error:', error.response?.data || error.message);
         throw error;
     }
 }
 
-// Команды бота
 bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId,
-        `👨‍🍳 Привет, администратор!\n\n` +
-        `Команды:\n` +
-        `/toggle ДИШ_ИД - Переключить доступность блюда\n` +
-        `/stats - Статистика\n` +
-        `/help - Помощь`
-    );
+    bot.sendMessage(msg.chat.id, '🤖 Бот управления рестораном запущен!');
 });
 
-bot.onText(/\/toggle (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
+bot.onText(/\/toggle (\d+)/, async (msg, match) => {
     const dishId = match[1];
 
     try {
         const result = await callAdminAPI(`/bot/dish/${dishId}/toggle`, 'POST');
-        bot.sendMessage(chatId, result.message);
+        bot.sendMessage(msg.chat.id, `✅ ${result.message}`);
     } catch (error) {
-        bot.sendMessage(chatId, '❌ Ошибка обновления блюда');
+        bot.sendMessage(msg.chat.id, `❌ Ошибка: ${error.response?.data?.error || error.message}`);
     }
 });
 
-bot.onText(/\/stats/, async (msg) => {
-    const chatId = msg.chat.id;
+bot.onText(/\/dish (\d+)/, async (msg, match) => {
+    const dishId = match[1];
 
     try {
-        // Простая статистика
-        const restaurants = await callAdminAPI('/restaurants');
-        const message =
-            `📊 Статистика:\n\n` +
-            `🍽️ Активных ресторанов: ${restaurants.length}\n` +
-            `🕒 Обновлено: ${new Date().toLocaleTimeString()}`;
+        const result = await callAdminAPI(`/bot/dish/${dishId}`);
+        const dish = result.dish;
 
-        bot.sendMessage(chatId, message);
+        bot.sendMessage(msg.chat.id,
+            `🍽️ ${dish.name}\n` +
+            `💰 ${dish.price} ₽\n` +
+            `✅ ${dish.is_available ? 'Доступно' : 'Недоступно'}\n` +
+            `🏪 ${dish.restaurant_name}`
+        );
     } catch (error) {
-        bot.sendMessage(chatId, 'Ошибка получения статистики');
+        bot.sendMessage(msg.chat.id, `❌ Ошибка: ${error.response?.data?.error || error.message}`);
     }
 });
 
-console.log('🤖 Telegram бот запущен...');
+console.log('🤖 Telegram бот запущен локально...');
+console.log('🔗 Подключен к API:', API_BASE_URL);
