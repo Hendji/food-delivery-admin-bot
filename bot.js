@@ -3,36 +3,33 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
 
-console.log('🚀 Запуск Telegram бота на Railway...');
+console.log('🚀 Telegram Bot starting on Railway...');
 
-// ==================== КОНФИГУРАЦИЯ ====================
+// ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const API_BASE_URL = 'https://food-delivery-api-production-8385.up.railway.app';
 const PORT = process.env.PORT || 3000;
 
-// Проверка обязательных переменных
+// Validate required env vars
 if (!TELEGRAM_TOKEN) {
-  console.error('❌ ОШИБКА: TELEGRAM_TOKEN не установлен!');
-  console.error('   Установите в Railway Variables: TELEGRAM_TOKEN');
+  console.error('❌ ERROR: TELEGRAM_TOKEN not set!');
   process.exit(1);
 }
 
 if (!ADMIN_API_KEY) {
-  console.error('❌ ОШИБКА: ADMIN_API_KEY не установлен!');
-  console.error('   Установите в Railway Variables: ADMIN_API_KEY');
+  console.error('❌ ERROR: ADMIN_API_KEY not set!');
   process.exit(1);
 }
 
-console.log('✅ Конфигурация загружена');
-console.log('🔗 API сервер:', API_BASE_URL);
-console.log('🔑 API Key:', ADMIN_API_KEY.substring(0, 8) + '...');
+console.log('✅ Config loaded');
+console.log('🔗 API Server:', API_BASE_URL);
 
-// ==================== НАСТРОЙКА ВЕБХУКА ====================
+// ==================== WEBHOOK SETUP ====================
 const app = express();
 app.use(express.json());
 
-// Определяем URL для вебхука
+// Get Railway domain
 const RAILWAY_PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 const RAILWAY_STATIC_URL = process.env.RAILWAY_STATIC_URL;
 
@@ -42,26 +39,18 @@ if (RAILWAY_PUBLIC_DOMAIN) {
 } else if (RAILWAY_STATIC_URL) {
   webhookUrl = `${RAILWAY_STATIC_URL}/bot${TELEGRAM_TOKEN}`;
 } else {
-  // Для локальной разработки
-  webhookUrl = `https://your-domain.com/bot${TELEGRAM_TOKEN}`;
-  console.warn('⚠️  Не найден Railway домен. Используйте локально или установите домен.');
+  console.error('❌ No Railway domain found!');
+  process.exit(1);
 }
 
 console.log('🌐 Webhook URL:', webhookUrl);
 
-// Создаем бота
-const bot = new TelegramBot(TELEGRAM_TOKEN, {
-  onlyFirstMatch: true,
-  request: {
-    timeout: 10000
-  }
-});
+// Create bot
+const bot = new TelegramBot(TELEGRAM_TOKEN);
 
-// ==================== API ФУНКЦИИ ====================
+// ==================== API HELPER ====================
 async function callAdminAPI(endpoint, method = 'GET') {
   try {
-    console.log(`📡 API запрос: ${method} ${endpoint}`);
-    
     const response = await axios({
       method,
       url: `${API_BASE_URL}${endpoint}`,
@@ -69,255 +58,83 @@ async function callAdminAPI(endpoint, method = 'GET') {
         'X-Admin-API-Key': ADMIN_API_KEY,
         'Content-Type': 'application/json'
       },
-      timeout: 8000
+      timeout: 10000
     });
-    
-    console.log(`✅ API ответ: ${response.status}`);
     return response.data;
-    
   } catch (error) {
-    console.error('❌ API ошибка:', {
-      endpoint,
-      status: error.response?.status,
-      message: error.response?.data?.error || error.message
-    });
+    console.error('API Error:', error.message);
     throw error;
   }
 }
 
-// ==================== КОМАНДЫ БОТА ====================
+// ==================== BOT COMMANDS ====================
 
 // /start
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  console.log(`👋 Старт от ${chatId}`);
-  
-  bot.sendMessage(chatId,
-    '🤖 *Бот управления рестораном*\n\n' +
-    '✅ Подключено к API: ' + API_BASE_URL + '\n\n' +
-    '📋 *Доступные команды:*\n' +
-    '• /toggle [id] - изменить доступность блюда\n' +
-    '• /dish [id] - информация о блюде\n' +
-    '• /restaurants - список ресторанов\n' +
-    '• /help - помощь\n\n' +
-    '📝 *Примеры:*\n' +
-    '/toggle 1\n' +
-    '/dish 1\n' +
-    '/restaurants',
-    { parse_mode: 'Markdown' }
-  );
-});
-
-// /help
-bot.onText(/\/help/, (msg) => {
   bot.sendMessage(msg.chat.id,
-    '📋 *Помощь по командам*\n\n' +
-    '*/toggle [id]*\n' +
-    'Переключить доступность блюда\n\n' +
-    '*/dish [id]*\n' +
-    'Информация о блюде\n\n' +
-    '*/restaurants*\n' +
-    'Список всех ресторанов\n\n' +
-    '*/menu [id]*\n' +
-    'Меню ресторана\n\n' +
-    '*Примеры:*\n' +
+    '🤖 *Food Delivery Admin Bot*\n\n' +
+    'Commands:\n' +
+    '• /toggle [id] - Toggle dish availability\n' +
+    '• /dish [id] - Show dish info\n' +
+    '• /restaurants - List restaurants\n' +
+    '• /help - Help\n\n' +
+    'Examples:\n' +
     '/toggle 1\n' +
-    '/dish 2\n' +
-    '/restaurants',
+    '/dish 1',
     { parse_mode: 'Markdown' }
   );
 });
 
 // /toggle [id]
 bot.onText(/\/toggle (\d+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
   const dishId = match[1];
   
   try {
-    await bot.sendChatAction(chatId, 'typing');
     const result = await callAdminAPI(`/bot/dish/${dishId}/toggle`, 'POST');
-    
-    const dish = result.dish;
-    const status = dish.is_available ? '✅ Доступно' : '❌ Недоступно';
-    
-    bot.sendMessage(chatId,
-      `🔄 *Статус изменен!*\n\n` +
-      `🍽️ *${dish.name}*\n` +
-      `🏪 ${dish.restaurant_name}\n` +
-      `💰 ${dish.price} ₽\n\n` +
-      `📊 *Новый статус:* ${status}\n\n` +
-      `🔍 Посмотреть: /dish ${dishId}`,
-      { parse_mode: 'Markdown' }
-    );
-    
+    bot.sendMessage(msg.chat.id, `✅ ${result.message}`);
   } catch (error) {
-    const errorMsg = error.response?.data?.error || error.message;
-    bot.sendMessage(chatId,
-      `❌ *Ошибка при изменении блюда*\n\n` +
-      `ID: ${dishId}\n` +
-      `Ошибка: ${errorMsg}\n\n` +
-      `Проверьте правильность ID`,
-      { parse_mode: 'Markdown' }
-    );
+    bot.sendMessage(msg.chat.id, `❌ Error: ${error.response?.data?.error || error.message}`);
   }
 });
 
 // /dish [id]
 bot.onText(/\/dish (\d+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
   const dishId = match[1];
   
   try {
-    await bot.sendChatAction(chatId, 'typing');
     const result = await callAdminAPI(`/bot/dish/${dishId}`);
     const dish = result.dish;
     
-    const status = dish.is_available ? '✅ Доступно' : '❌ Недоступно';
-    const spicy = dish.is_spicy ? '🌶️ Да' : '👌 Нет';
-    const veg = dish.is_vegetarian ? '🥬 Да' : '🍖 Нет';
-    
-    const message = 
+    const status = dish.is_available ? '✅ Available' : '❌ Unavailable';
+    bot.sendMessage(msg.chat.id,
       `🍽️ *${dish.name}*\n\n` +
-      `📝 ${dish.description}\n\n` +
-      `💰 *Цена:* ${dish.price} ₽\n` +
-      `📊 *Статус:* ${status}\n` +
-      `🏪 *Ресторан:* ${dish.restaurant_name}\n` +
-      `⏱️ *Готовка:* ${dish.preparation_time} мин\n` +
-      `🌶️ *Острое:* ${spicy}\n` +
-      `🥦 *Вегетарианское:* ${veg}\n\n` +
-      `🧂 *Ингредиенты:*\n${dish.ingredients?.join(', ') || 'Нет данных'}\n\n` +
-      `🔄 *Изменить статус:* /toggle ${dishId}`;
-    
-    // Отправляем с фото если есть
-    if (dish.image_url && dish.image_url.startsWith('http')) {
-      try {
-        await bot.sendPhoto(chatId, dish.image_url, {
-          caption: message,
-          parse_mode: 'Markdown'
-        });
-        return;
-      } catch (photoError) {
-        console.log('Не удалось отправить фото:', photoError.message);
-      }
-    }
-    
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    
-  } catch (error) {
-    const errorMsg = error.response?.data?.error || error.message;
-    bot.sendMessage(chatId,
-      `❌ *Блюдо не найдено*\n\n` +
-      `ID: ${dishId}\n` +
-      `Ошибка: ${errorMsg}\n\n` +
-      `Проверьте правильность ID`,
+      `💰 ${dish.price} ₽\n` +
+      `📊 ${status}\n` +
+      `🏪 ${dish.restaurant_name}\n\n` +
+      `Toggle: /toggle ${dishId}`,
       { parse_mode: 'Markdown' }
     );
-  }
-});
-
-// /restaurants
-bot.onText(/\/restaurants/, async (msg) => {
-  const chatId = msg.chat.id;
-  
-  try {
-    await bot.sendChatAction(chatId, 'typing');
-    const restaurants = await callAdminAPI('/restaurants');
-    
-    if (!restaurants || restaurants.length === 0) {
-      return bot.sendMessage(chatId, '😔 Рестораны не найдены');
-    }
-    
-    let message = `🏪 *Список ресторанов*\n\n`;
-    
-    restaurants.forEach((rest, index) => {
-      message += 
-        `*${index + 1}. ${rest.name}*\n` +
-        `⭐ ${rest.rating || 'Нет рейтинга'}\n` +
-        `🚚 ${rest.delivery_time} (${rest.delivery_price})\n` +
-        `📋 Категории: ${rest.categories?.join(', ') || 'Нет'}\n` +
-        `🍽️ Меню: /menu_${rest.id}\n\n`;
-    });
-    
-    message += `📝 *Всего ресторанов:* ${restaurants.length}`;
-    
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    
   } catch (error) {
-    bot.sendMessage(chatId,
-      `❌ *Ошибка загрузки ресторанов*\n\n` +
-      `${error.message}`,
-      { parse_mode: 'Markdown' }
-    );
+    bot.sendMessage(msg.chat.id, `❌ Error: ${error.response?.data?.error || error.message}`);
   }
 });
 
-// /menu [id] или /menu_id
-bot.onText(/\/menu(?:_(\d+)|\s+(\d+))/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const restaurantId = match[1] || match[2];
-  
-  if (!restaurantId) {
-    return bot.sendMessage(chatId, 'Укажите ID ресторана: /menu [id]');
-  }
-  
-  try {
-    await bot.sendChatAction(chatId, 'typing');
-    const menu = await callAdminAPI(`/restaurants/${restaurantId}/menu`);
-    
-    if (!menu || menu.length === 0) {
-      return bot.sendMessage(chatId, `😔 Меню ресторана ${restaurantId} пустое`);
-    }
-    
-    let message = `📋 *Меню ресторана*\n\n`;
-    
-    menu.forEach((dish, index) => {
-      const status = dish.is_available ? '✅' : '❌';
-      message += 
-        `${status} *${dish.name}*\n` +
-        `💰 ${dish.price} ₽ | ID: ${dish.id}\n` +
-        `${dish.description?.substring(0, 60)}...\n` +
-        `🔍 /dish_${dish.id}\n\n`;
-    });
-    
-    message += `🍽️ *Всего блюд:* ${menu.length}`;
-    
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    
-  } catch (error) {
-    bot.sendMessage(chatId,
-      `❌ *Ошибка загрузки меню*\n\n` +
-      `Ресторан ID: ${restaurantId}\n` +
-      `${error.message}`,
-      { parse_mode: 'Markdown' }
-    );
-  }
+// /help
+bot.onText(/\/help/, (msg) => {
+  bot.sendMessage(msg.chat.id,
+    '📋 *Help*\n\n' +
+    '*/toggle [id]* - Toggle dish\n' +
+    '*/dish [id]* - Dish info\n' +
+    '*/restaurants* - List restaurants\n\n' +
+    'Example: /toggle 1',
+    { parse_mode: 'Markdown' }
+  );
 });
 
-// Быстрые команды /dish_1, /toggle_1
-bot.onText(/\/dish_(\d+)/, (msg, match) => {
-  msg.text = `/dish ${match[1]}`;
-  bot.processUpdate({ message: msg });
-});
-
-bot.onText(/\/toggle_(\d+)/, (msg, match) => {
-  msg.text = `/toggle ${match[1]}`;
-  bot.processUpdate({ message: msg });
-});
-
-bot.onText(/\/menu_(\d+)/, (msg, match) => {
-  msg.text = `/menu ${match[1]}`;
-  bot.processUpdate({ message: msg });
-});
-
-// ==================== ВЕБХУК ЭНДПОИНТ ====================
+// ==================== WEBHOOK ENDPOINT ====================
 app.post(`/bot${TELEGRAM_TOKEN}`, (req, res) => {
-  try {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Ошибка обработки вебхука:', error);
-    res.sendStatus(500);
-  }
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
 // ==================== HEALTH CHECK ====================
@@ -325,57 +142,26 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'telegram-bot',
-    timestamp: new Date().toISOString(),
-    api: API_BASE_URL,
-    bot: 'running'
+    timestamp: new Date().toISOString()
   });
 });
 
-app.get('/', (req, res) => {
-  res.json({
-    message: '🤖 Telegram Bot for Food Delivery API',
-    endpoints: {
-      health: '/health',
-      webhook: `/bot${TELEGRAM_TOKEN.substring(0, 10)}...`
-    },
-    status: 'operational'
-  });
-});
-
-// ==================== ЗАПУСК СЕРВЕРА ====================
+// ==================== START SERVER ====================
 app.listen(PORT, async () => {
-  console.log(`✅ Express сервер запущен на порту ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
   
   try {
-    // Устанавливаем вебхук
+    // Set webhook
     await bot.setWebHook(webhookUrl);
-    console.log('✅ Вебхук установлен:', webhookUrl);
+    console.log('✅ Webhook set');
     
-    // Получаем информацию о боте
+    // Get bot info
     const botInfo = await bot.getMe();
-    console.log('🤖 Информация о боте:');
-    console.log('   Имя:', botInfo.first_name);
-    console.log('   Username:', botInfo.username);
-    console.log('   ID:', botInfo.id);
+    console.log(`🤖 Bot: @${botInfo.username} (${botInfo.first_name})`);
     
-    console.log('\n🎉 Бот успешно запущен и готов к работе!');
-    console.log('📱 Найдите бота в Telegram: @' + botInfo.username);
-    console.log('💬 Отправьте /start для начала работы');
+    console.log('🎉 Bot is ready!');
     
   } catch (error) {
-    console.error('❌ Ошибка при запуске бота:', error.message);
-    console.error('Проверьте TELEGRAM_TOKEN и интернет соединение');
-  }
-});
-
-// Обработка ошибок бота
-bot.on('error', (error) => {
-  console.error('🔴 Ошибка бота:', error.message);
-});
-
-// Логирование входящих сообщений
-bot.on('message', (msg) => {
-  if (msg.text && !msg.text.startsWith('/')) {
-    console.log(`💬 Сообщение от ${msg.chat.id}: "${msg.text.substring(0, 50)}..."`);
+    console.error('❌ Failed to start bot:', error.message);
   }
 });
