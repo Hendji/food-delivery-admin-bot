@@ -2,7 +2,7 @@
   "name": "food-delivery-admin-bot",
   "version": "1.0.0",
   "description": "Telegram bot for food delivery administration",
-  "main": "bot.js",
+  "main": "bot-with-menu.js",
   "scripts": {
     "start": "node bot.js"
   },
