@@ -3,19 +3,17 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const http = require('http');
 
-console.log('🚀 Admin Bot Fixed Starting...');
+console.log('🚀 Admin Bot Safe Starting...');
 
 // ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const API_BASE_URL = 'https://food-delivery-api-production-8385.up.railway.app';
 
-// Список администраторов
 const ADMIN_USERS = process.env.ADMIN_USERS ? 
   process.env.ADMIN_USERS.split(',').map(id => parseInt(id.trim())) : 
   [];
 
-// Проверка прав
 function isAdminUser(chatId) {
   return ADMIN_USERS.length === 0 || ADMIN_USERS.includes(chatId);
 }
@@ -27,34 +25,121 @@ if (!TELEGRAM_TOKEN || !ADMIN_API_KEY) {
 
 console.log('✅ Config loaded');
 console.log('🔗 API:', API_BASE_URL);
-console.log('👑 Admin users:', ADMIN_USERS);
 
 // ==================== BOT SETUP ====================
 const bot = new TelegramBot(TELEGRAM_TOKEN, {
   polling: {
     interval: 1000,
-    params: {
-      timeout: 30,
-      limit: 100
-    }
-  },
-  request: {
-    timeout: 30000
+    params: { timeout: 30, limit: 100 }
   }
 });
 
-// ==================== STATE MANAGEMENT ====================
-const userStates = new Map();
-
-function getUserState(chatId) {
-  if (!userStates.has(chatId)) {
-    userStates.set(chatId, { mode: 'normal' });
-  }
-  return userStates.get(chatId);
+// ==================== SAFE TEXT FUNCTION ====================
+// Функция для безопасной обработки текста (без Markdown)
+function safeText(text) {
+  // Экранируем специальные символы Markdown
+  return text
+    .replace(/\*/g, '•')
+    .replace(/_/g, '')
+    .replace(/`/g, "'")
+    .replace(/\[/g, '(')
+    .replace(/\]/g, ')');
 }
 
-// ==================== API HELPER ====================
-async function callAPI(endpoint, method = 'GET', data = null) {
+// Альтернатива: отключаем Markdown полностью
+function sendSafeMessage(chatId, text, options = {}) {
+  const safeOptions = { ...options };
+  delete safeOptions.parse_mode; // Убираем Markdown
+  return bot.sendMessage(chatId, safeText(text), safeOptions);
+}
+
+function editSafeMessage(chatId, messageId, text, options = {}) {
+  const safeOptions = {
+    chat_id: chatId,
+    message_id: messageId,
+    ...options
+  };
+  delete safeOptions.parse_mode;
+  return bot.editMessageText(safeText(text), safeOptions);
+}
+
+// ==================== KEYBOARDS ====================
+
+// Главное меню
+const adminMainMenu = {
+  reply_markup: {
+    keyboard: [
+      ['🍽️ Блюда', '📦 Заказы'],
+      ['🏪 Рестораны', '📊 Статистика'],
+      ['⚙️ Админ', '🆘 Помощь']
+    ],
+    resize_keyboard: true
+  }
+};
+
+// Меню блюд
+const dishesMenu = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '📋 Все блюда', callback_data: 'all_dishes' },
+        { text: '➕ Создать', callback_data: 'create_dish' }
+      ],
+      [
+        { text: '🔍 Найти', callback_data: 'find_dish' }
+      ],
+      [
+        { text: '🏠 Главное меню', callback_data: 'main_menu' }
+      ]
+    ]
+  }
+};
+
+// Меню заказов
+const ordersMenu = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '🆕 Новые', callback_data: 'new_orders' },
+        { text: '✅ Подтвержденные', callback_data: 'confirmed_orders' }
+      ],
+      [
+        { text: '👨‍🍳 Готовятся', callback_data: 'preparing_orders' },
+        { text: '🚚 Доставляются', callback_data: 'delivering_orders' }
+      ],
+      [
+        { text: '🏠 Главное меню', callback_data: 'main_menu' }
+      ]
+    ]
+  }
+};
+
+// Меню действий с блюдом
+function getDishActions(dishId, isAvailable) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { 
+            text: isAvailable ? '❌ Выключить' : '✅ Включить', 
+            callback_data: `toggle_dish_${dishId}`
+          }
+        ],
+        [
+          { text: '✏️ Изменить', callback_data: `edit_dish_${dishId}` },
+          { text: '🗑️ Удалить', callback_data: `delete_dish_${dishId}` }
+        ],
+        [
+          { text: '📋 Все блюда', callback_data: 'all_dishes' },
+          { text: '🏠 Главное меню', callback_data: 'main_menu' }
+        ]
+      ]
+    }
+  };
+}
+
+// ==================== API FUNCTIONS ====================
+async function apiRequest(endpoint, method = 'GET', data = null) {
   try {
     const config = {
       method,
@@ -65,163 +150,15 @@ async function callAPI(endpoint, method = 'GET', data = null) {
       },
       timeout: 10000
     };
-
-    if (data) {
-      config.data = data;
-    }
-
+    
+    if (data) config.data = data;
+    
     const response = await axios(config);
     return response.data;
   } catch (error) {
-    console.error('API Error:', error.response?.data || error.message);
+    console.error('API Error:', error.message);
     throw error;
   }
-}
-
-// ==================== KEYBOARDS (ИСПРАВЛЕННЫЕ) ====================
-
-// Главное меню для админов (РЕПЛИ-КЛАВИАТУРА)
-const adminMainMenu = {
-  reply_markup: {
-    keyboard: [
-      ['🍽️ Управление блюдами', '🏪 Рестораны'],
-      ['📦 Управление заказами', '📊 Статистика'],
-      ['⚙️ Админ-панель', '🆘 Помощь']
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false
-  }
-};
-
-// Меню управления блюдами (INLINE-КЛАВИАТУРА)
-const dishesManagementMenu = {
-  reply_markup: {
-    inline_keyboard: [
-      [
-        { text: '📋 Список блюд', callback_data: 'dishes_list' },
-        { text: '➕ Новое блюдо', callback_data: 'dish_create' }
-      ],
-      [
-        { text: '🔍 Найти блюдо', callback_data: 'dish_search' },
-        { text: '🔄 Быстрое управление', callback_data: 'dish_quick_manage' }
-      ],
-      [
-        { text: '🏠 Главное меню', callback_data: 'main_menu' }
-      ]
-    ]
-  }
-};
-
-// Меню управления заказами (INLINE-КЛАВИАТУРА)
-const ordersManagementMenu = {
-  reply_markup: {
-    inline_keyboard: [
-      [
-        { text: '🆕 Новые заказы', callback_data: 'orders_new' },
-        { text: '✅ Подтвержденные', callback_data: 'orders_confirmed' }
-      ],
-      [
-        { text: '👨‍🍳 В готовке', callback_data: 'orders_preparing' },
-        { text: '🚚 В доставке', callback_data: 'orders_delivering' }
-      ],
-      [
-        { text: '🎉 Доставленные', callback_data: 'orders_delivered' },
-        { text: '❌ Отмененные', callback_data: 'orders_cancelled' }
-      ],
-      [
-        { text: '🏠 Главное меню', callback_data: 'main_menu' }
-      ]
-    ]
-  }
-};
-
-// Админ-панель (INLINE-КЛАВИАТУРА)
-const adminPanelMenu = {
-  reply_markup: {
-    inline_keyboard: [
-      [
-        { text: '📊 Системная статистика', callback_data: 'system_stats' },
-        { text: '👥 Управление доступом', callback_data: 'access_manage' }
-      ],
-      [
-        { text: '🔧 Настройки API', callback_data: 'api_settings' }
-      ],
-      [
-        { text: '🏠 Главное меню', callback_data: 'main_menu' }
-      ]
-    ]
-  }
-};
-
-// Меню действий с блюдом
-function createDishActionsMenu(dishId, isAvailable) {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: isAvailable ? '❌ Сделать недоступным' : '✅ Сделать доступным', 
-            callback_data: `dish_toggle_${dishId}` }
-        ],
-        [
-          { text: '✏️ Редактировать', callback_data: `dish_edit_${dishId}` },
-          { text: '🗑️ Удалить', callback_data: `dish_delete_${dishId}` }
-        ],
-        [
-          { text: '📋 Список блюд', callback_data: 'dishes_list' },
-          { text: '🏠 Главное меню', callback_data: 'main_menu' }
-        ]
-      ]
-    }
-  };
-}
-
-// Кнопка "Назад" (для отмены действий)
-const cancelKeyboard = {
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: '❌ Отмена', callback_data: 'cancel_action' }]
-    ]
-  }
-};
-
-// ==================== ИСПРАВЛЕННАЯ ФУНКЦИЯ ОТПРАВКИ ====================
-function updateOrSend(chatId, messageId, text, options) {
-  // Проверяем, есть ли reply_markup в options
-  const hasReplyMarkup = options && options.reply_markup;
-  
-  if (messageId) {
-    // Для редактирования сообщения
-    const editOptions = {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'Markdown'
-    };
-    
-    if (hasReplyMarkup) {
-      editOptions.reply_markup = options.reply_markup;
-    }
-    
-    return bot.editMessageText(text, editOptions).catch(err => {
-      console.log('Cannot edit message, sending new:', err.message);
-      // Если не удалось отредактировать, отправляем новое сообщение
-      return sendNewMessage(chatId, text, options);
-    });
-  } else {
-    // Для нового сообщения
-    return sendNewMessage(chatId, text, options);
-  }
-}
-
-function sendNewMessage(chatId, text, options) {
-  const sendOptions = {
-    parse_mode: 'Markdown'
-  };
-  
-  if (options && options.reply_markup) {
-    sendOptions.reply_markup = options.reply_markup;
-  }
-  
-  return bot.sendMessage(chatId, text, sendOptions);
 }
 
 // ==================== COMMAND HANDLERS ====================
@@ -229,22 +166,54 @@ function sendNewMessage(chatId, text, options) {
 // /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const isAdmin = isAdminUser(chatId);
   
-  if (!isAdmin) {
-    return bot.sendMessage(chatId,
-      '⛔ У вас нет доступа к админ-панели.',
-      { parse_mode: 'Markdown' }
-    );
+  if (!isAdminUser(chatId)) {
+    return sendSafeMessage(chatId, '⛔ Нет доступа к админ-панели.');
   }
   
-  console.log(`👑 Admin start from ${chatId}`);
+  console.log(`👑 Admin start: ${chatId}`);
   
-  bot.sendMessage(chatId,
-    '👑 *АДМИНИСТРАТИВНАЯ ПАНЕЛЬ*\n\n' +
-    'Выберите раздел для управления:',
+  sendSafeMessage(chatId,
+    '👑 АДМИН ПАНЕЛЬ\n\n' +
+    'Доступные разделы:',
     adminMainMenu
   );
+});
+
+// /help
+bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdminUser(chatId)) return;
+  
+  sendSafeMessage(chatId,
+    '🆘 ПОМОЩЬ АДМИНИСТРАТОРУ\n\n' +
+    'Основные разделы:\n' +
+    '• 🍽️ Блюда - управление меню\n' +
+    '• 📦 Заказы - подтверждение заказов\n' +
+    '• 📊 Статистика - общая информация\n' +
+    '• ⚙️ Админ - системные настройки\n\n' +
+    'Команды:\n' +
+    '/start - главное меню\n' +
+    '/orders - быстрый доступ к заказам\n' +
+    '/dishes - управление блюдами',
+    adminMainMenu
+  );
+});
+
+// /orders - быстрый доступ
+bot.onText(/\/orders/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdminUser(chatId)) return;
+  
+  showOrdersSection(chatId);
+});
+
+// /dishes - быстрый доступ
+bot.onText(/\/dishes/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdminUser(chatId)) return;
+  
+  showDishesSection(chatId);
 });
 
 // ==================== TEXT MESSAGE HANDLERS ====================
@@ -252,46 +221,50 @@ bot.onText(/\/start/, (msg) => {
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
-  const isAdmin = isAdminUser(chatId);
   
-  if (!isAdmin || !text || text.startsWith('/')) return;
+  if (!isAdminUser(chatId) || !text || text.startsWith('/')) return;
   
-  console.log(`💬 Admin menu: ${chatId} -> ${text}`);
+  console.log(`💬 Menu: ${chatId} -> ${text}`);
   
   switch(text) {
-    case '🍽️ Управление блюдами':
-      showDishesManagement(chatId);
+    case '🍽️ Блюда':
+      showDishesSection(chatId);
+      break;
+      
+    case '📦 Заказы':
+      showOrdersSection(chatId);
       break;
       
     case '🏪 Рестораны':
-      bot.sendMessage(chatId, '🏪 Раздел ресторанов в разработке...', adminMainMenu);
-      break;
-      
-    case '📦 Управление заказами':
-      showOrdersManagement(chatId);
+      sendSafeMessage(chatId, '🏪 Раздел ресторанов в разработке...', adminMainMenu);
       break;
       
     case '📊 Статистика':
       showStatistics(chatId);
       break;
       
-    case '⚙️ Админ-панель':
+    case '⚙️ Админ':
       showAdminPanel(chatId);
       break;
       
     case '🆘 Помощь':
-      showHelp(chatId);
+      sendSafeMessage(chatId,
+        '🆘 ПОМОЩЬ\n\n' +
+        'Для управления используйте меню.\n' +
+        'Все функции доступны через кнопки.',
+        adminMainMenu
+      );
       break;
       
     default:
-      // Если введен ID блюда
+      // Если введен ID
       if (/^\d+$/.test(text)) {
-        showDishInfo(chatId, parseInt(text));
+        showDishById(chatId, parseInt(text));
       }
   }
 });
 
-// ==================== CALLBACK QUERY HANDLERS ====================
+// ==================== CALLBACK HANDLERS ====================
 
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
@@ -307,97 +280,96 @@ bot.on('callback_query', async (callbackQuery) => {
   
   await bot.answerCallbackQuery(callbackQuery.id);
   
-  // Обработка основных callback данных
+  // Обработка callback
   if (data === 'main_menu') {
     showMainMenu(chatId, messageId);
     
-  } else if (data === 'dishes_list') {
+  } else if (data === 'all_dishes') {
     showAllDishes(chatId, messageId);
     
-  } else if (data === 'dish_create') {
-    startDishCreation(chatId, messageId);
+  } else if (data === 'create_dish') {
+    sendSafeMessage(chatId,
+      '➕ СОЗДАНИЕ БЛЮДА\n\n' +
+      'Используйте API для создания:\n\n' +
+      'POST /admin/dishes\n' +
+      'Headers: X-Admin-API-Key\n\n' +
+      'Пример JSON:\n' +
+      '{\n' +
+      '  "restaurant_id": 1,\n' +
+      '  "name": "Новое блюдо",\n' +
+      '  "price": 500,\n' +
+      '  "description": "Описание"\n' +
+      '}',
+      dishesMenu
+    );
     
-  } else if (data === 'dish_search') {
-    bot.editMessageText('🔍 Введите ID блюда для поиска:', {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'Markdown',
-      reply_markup: cancelKeyboard.reply_markup
-    });
+  } else if (data === 'find_dish') {
+    editSafeMessage(chatId, messageId,
+      '🔍 ПОИСК БЛЮДА\n\n' +
+      'Введите ID блюда:',
+      { reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'main_menu' }]] } }
+    );
     
-  } else if (data.startsWith('dish_toggle_')) {
-    const dishId = data.replace('dish_toggle_', '');
-    toggleDishAvailability(chatId, dishId, messageId);
+  } else if (data.startsWith('toggle_dish_')) {
+    const dishId = data.replace('toggle_dish_', '');
+    toggleDish(chatId, dishId, messageId);
     
-  } else if (data.startsWith('dish_edit_')) {
-    const dishId = data.replace('dish_edit_', '');
-    showDishEditMenu(chatId, dishId, messageId);
+  } else if (data.startsWith('edit_dish_')) {
+    const dishId = data.replace('edit_dish_', '');
+    showDishDetails(chatId, dishId, messageId);
     
-  } else if (data.startsWith('dish_delete_')) {
-    const dishId = data.replace('dish_delete_', '');
-    confirmDishDeletion(chatId, dishId, messageId);
+  } else if (data.startsWith('delete_dish_')) {
+    const dishId = data.replace('delete_dish_', '');
+    confirmDeleteDish(chatId, dishId, messageId);
     
-  } else if (data === 'orders_new') {
-    showOrdersByStatus(chatId, 'pending', messageId);
+  } else if (data === 'new_orders') {
+    showNewOrders(chatId, messageId);
     
-  } else if (data === 'orders_confirmed') {
-    showOrdersByStatus(chatId, 'confirmed', messageId);
-    
-  } else if (data.startsWith('order_action_')) {
-    handleOrderAction(chatId, data, messageId);
-    
-  } else if (data === 'system_stats') {
-    showSystemStats(chatId, messageId);
-    
-  } else if (data === 'access_manage') {
-    showAccessInfo(chatId, messageId);
-    
-  } else if (data === 'cancel_action') {
-    showMainMenu(chatId, messageId);
+  } else if (data === 'confirmed_orders') {
+    sendSafeMessage(chatId, '✅ Раздел в разработке...', ordersMenu);
   }
 });
 
-// ==================== DISH MANAGEMENT FUNCTIONS ====================
+// ==================== DISH FUNCTIONS ====================
 
-function showDishesManagement(chatId) {
-  bot.sendMessage(chatId,
-    '🍽️ *УПРАВЛЕНИЕ БЛЮДАМИ*\n\n' +
+function showDishesSection(chatId) {
+  sendSafeMessage(chatId,
+    '🍽️ УПРАВЛЕНИЕ БЛЮДАМИ\n\n' +
     'Выберите действие:',
-    dishesManagementMenu
+    dishesMenu
   );
 }
 
 async function showAllDishes(chatId, messageId = null) {
   try {
-    await bot.sendChatAction(chatId, 'typing');
-    
-    const restaurants = await callAPI('/restaurants');
+    const restaurants = await apiRequest('/restaurants');
     
     if (!restaurants || restaurants.length === 0) {
-      return updateOrSend(chatId, messageId,
-        '😔 Рестораны не найдены.',
-        dishesManagementMenu
-      );
+      const message = '😔 Рестораны не найдены.';
+      if (messageId) {
+        return editSafeMessage(chatId, messageId, message, dishesMenu);
+      }
+      return sendSafeMessage(chatId, message, dishesMenu);
     }
     
-    let message = '📋 *ВСЕ БЛЮДА*\n\n';
-    let dishesKeyboard = [];
+    let message = '📋 ВСЕ БЛЮДА\n\n';
+    let keyboard = [];
     
-    for (const restaurant of restaurants.slice(0, 3)) { // Ограничиваем 3 ресторанами
+    for (const restaurant of restaurants.slice(0, 3)) {
       try {
-        const menu = await callAPI(`/restaurants/${restaurant.id}/menu`);
+        const menu = await apiRequest(`/restaurants/${restaurant.id}/menu`);
         
         if (menu && menu.length > 0) {
-          message += `*${restaurant.name}*\n`;
+          message += `${restaurant.name}:\n`;
           
-          menu.slice(0, 5).forEach(dish => { // Ограничиваем 5 блюдами
+          menu.slice(0, 5).forEach(dish => {
             const status = dish.is_available ? '✅' : '❌';
             message += `${status} ${dish.name} - ${dish.price} ₽ (ID: ${dish.id})\n`;
             
-            dishesKeyboard.push([
+            keyboard.push([
               { 
                 text: `${status} ${dish.name.substring(0, 15)}`, 
-                callback_data: `dish_edit_${dish.id}` 
+                callback_data: `edit_dish_${dish.id}`
               }
             ]);
           });
@@ -405,88 +377,115 @@ async function showAllDishes(chatId, messageId = null) {
           message += '\n';
         }
       } catch (error) {
-        console.error('Error loading menu:', error.message);
+        console.log('Menu error:', error.message);
       }
     }
     
-    if (dishesKeyboard.length === 0) {
+    if (keyboard.length === 0) {
       message = '😔 Блюда не найдены.';
-      dishesKeyboard = [[{ text: '➕ Создать первое блюдо', callback_data: 'dish_create' }]];
+      keyboard = [[{ text: '➕ Создать первое блюдо', callback_data: 'create_dish' }]];
     }
     
-    dishesKeyboard.push([{ text: '🔙 Назад', callback_data: 'main_menu' }]);
+    keyboard.push([{ text: '🏠 Главное меню', callback_data: 'main_menu' }]);
     
-    const keyboard = { reply_markup: { inline_keyboard: dishesKeyboard } };
+    const replyMarkup = { reply_markup: { inline_keyboard: keyboard } };
     
-    updateOrSend(chatId, messageId, message, keyboard);
+    if (messageId) {
+      editSafeMessage(chatId, messageId, message, replyMarkup);
+    } else {
+      sendSafeMessage(chatId, message, replyMarkup);
+    }
     
   } catch (error) {
-    const errorMessage = '❌ Ошибка при загрузке блюд';
-    updateOrSend(chatId, messageId, errorMessage, dishesManagementMenu);
+    const errorMsg = '❌ Ошибка загрузки блюд';
+    if (messageId) {
+      editSafeMessage(chatId, messageId, errorMsg, dishesMenu);
+    } else {
+      sendSafeMessage(chatId, errorMsg, dishesMenu);
+    }
   }
 }
 
-function startDishCreation(chatId, messageId = null) {
-  const message = '➕ *СОЗДАНИЕ НОВОГО БЛЮДА*\n\n' +
-    'Эта функция находится в разработке.\n' +
-    'Пока используйте API для создания блюд.\n\n' +
-    'Endpoint: POST /admin/dishes\n' +
-    'Headers: X-Admin-API-Key: ваш_ключ';
-  
-  updateOrSend(chatId, messageId, message, dishesManagementMenu);
-}
-
-async function showDishInfo(chatId, dishId, messageId = null) {
+async function showDishById(chatId, dishId) {
   try {
-    const result = await callAPI(`/bot/dish/${dishId}`);
+    const result = await apiRequest(`/bot/dish/${dishId}`);
     const dish = result.dish;
     
     const message = 
-      `🍽️ *${dish.name}*\n\n` +
-      `📝 ${dish.description}\n` +
-      `💰 Цена: ${dish.price} ₽\n` +
-      `⏱️ Время готовки: ${dish.preparation_time} мин\n` +
-      `📊 Статус: ${dish.is_available ? '✅ Доступно' : '❌ Недоступно'}\n` +
-      `🏪 Ресторан: ${dish.restaurant_name}\n\n` +
-      `🆔 ID: ${dish.id}`;
+      `🍽️ ${dish.name}\n\n` +
+      `${dish.description}\n\n` +
+      `Цена: ${dish.price} ₽\n` +
+      `Время готовки: ${dish.preparation_time} мин\n` +
+      `Статус: ${dish.is_available ? '✅ Доступно' : '❌ Недоступно'}\n` +
+      `Ресторан: ${dish.restaurant_name}\n\n` +
+      `ID: ${dish.id}`;
     
-    const keyboard = createDishActionsMenu(dish.id, dish.is_available);
+    const actions = getDishActions(dish.id, dish.is_available);
     
-    updateOrSend(chatId, messageId, message, keyboard);
+    sendSafeMessage(chatId, message, actions);
     
   } catch (error) {
-    updateOrSend(chatId, messageId,
-      `❌ Блюдо #${dishId} не найдено`,
-      dishesManagementMenu
-    );
+    sendSafeMessage(chatId, `❌ Блюдо #${dishId} не найдено`, dishesMenu);
   }
 }
 
-function showDishEditMenu(chatId, dishId, messageId = null) {
-  showDishInfo(chatId, dishId, messageId);
+async function showDishDetails(chatId, dishId, messageId = null) {
+  try {
+    const result = await apiRequest(`/bot/dish/${dishId}`);
+    const dish = result.dish;
+    
+    const message = 
+      `🍽️ ${dish.name}\n\n` +
+      `${dish.description}\n\n` +
+      `• Цена: ${dish.price} ₽\n` +
+      `• Время: ${dish.preparation_time} мин\n` +
+      `• Статус: ${dish.is_available ? '✅ Доступно' : '❌ Недоступно'}\n` +
+      `• Ресторан: ${dish.restaurant_name}\n` +
+      `• Острое: ${dish.is_spicy ? 'Да' : 'Нет'}\n` +
+      `• Вегетарианское: ${dish.is_vegetarian ? 'Да' : 'Нет'}\n\n` +
+      `ID: ${dish.id}`;
+    
+    const actions = getDishActions(dish.id, dish.is_available);
+    
+    if (messageId) {
+      editSafeMessage(chatId, messageId, message, actions);
+    } else {
+      sendSafeMessage(chatId, message, actions);
+    }
+    
+  } catch (error) {
+    const errorMsg = `❌ Блюдо #${dishId} не найдено`;
+    if (messageId) {
+      editSafeMessage(chatId, messageId, errorMsg, dishesMenu);
+    } else {
+      sendSafeMessage(chatId, errorMsg, dishesMenu);
+    }
+  }
 }
 
-async function toggleDishAvailability(chatId, dishId, messageId = null) {
+async function toggleDish(chatId, dishId, messageId = null) {
   try {
-    const result = await callAPI(`/bot/dish/${dishId}/toggle`, 'POST');
+    const result = await apiRequest(`/bot/dish/${dishId}/toggle`, 'POST');
     
-    const status = result.dish.is_available ? '✅ Доступно' : '❌ Недоступно';
+    const status = result.dish.is_available ? '✅ Включено' : '❌ Выключено';
     const message = `🔄 Статус изменен: ${status}`;
     
-    // Обновляем информацию о блюде
-    showDishInfo(chatId, dishId, messageId);
+    // Показываем обновленную информацию
+    showDishDetails(chatId, dishId, messageId);
     
   } catch (error) {
-    updateOrSend(chatId, messageId,
-      `❌ Ошибка: ${error.message}`,
-      dishesManagementMenu
-    );
+    const errorMsg = `❌ Ошибка: ${error.message}`;
+    if (messageId) {
+      editSafeMessage(chatId, messageId, errorMsg, dishesMenu);
+    } else {
+      sendSafeMessage(chatId, errorMsg, dishesMenu);
+    }
   }
 }
 
-async function confirmDishDeletion(chatId, dishId, messageId = null) {
+async function confirmDeleteDish(chatId, dishId, messageId = null) {
   try {
-    const result = await callAPI(`/bot/dish/${dishId}`);
+    const result = await apiRequest(`/bot/dish/${dishId}`);
     const dish = result.dish;
     
     const keyboard = {
@@ -494,120 +493,163 @@ async function confirmDishDeletion(chatId, dishId, messageId = null) {
         inline_keyboard: [
           [
             { text: '🗑️ УДАЛИТЬ', callback_data: `confirm_delete_${dishId}` },
-            { text: '❌ ОТМЕНА', callback_data: `dish_edit_${dishId}` }
+            { text: '❌ ОТМЕНА', callback_data: `edit_dish_${dishId}` }
           ]
         ]
       }
     };
     
-    updateOrSend(chatId, messageId,
-      `🗑️ *ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ*\n\n` +
+    const message = 
+      `🗑️ ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ\n\n` +
       `Удалить блюдо?\n\n` +
-      `🍽️ ${dish.name}\n` +
-      `💰 ${dish.price} ₽\n` +
-      `🏪 ${dish.restaurant_name}\n\n` +
-      `⚠️ Если блюдо есть в заказах, оно будет скрыто.`,
-      keyboard
-    );
+      `${dish.name}\n` +
+      `${dish.price} ₽\n` +
+      `${dish.restaurant_name}\n\n` +
+      `Внимание: если блюдо есть в заказах, оно будет скрыто.`;
+    
+    if (messageId) {
+      editSafeMessage(chatId, messageId, message, keyboard);
+    } else {
+      sendSafeMessage(chatId, message, keyboard);
+    }
     
   } catch (error) {
-    updateOrSend(chatId, messageId,
-      `❌ Ошибка: ${error.message}`,
-      dishesManagementMenu
-    );
+    const errorMsg = `❌ Ошибка: ${error.message}`;
+    if (messageId) {
+      editSafeMessage(chatId, messageId, errorMsg, dishesMenu);
+    } else {
+      sendSafeMessage(chatId, errorMsg, dishesMenu);
+    }
   }
 }
 
-// ==================== ORDER MANAGEMENT FUNCTIONS ====================
+// Обработка подтверждения удаления
+bot.on('callback_query', async (callbackQuery) => {
+  const data = callbackQuery.data;
+  
+  if (!data.startsWith('confirm_delete_')) return;
+  
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const dishId = data.replace('confirm_delete_', '');
+  
+  await bot.answerCallbackQuery(callbackQuery.id);
+  
+  try {
+    const result = await apiRequest(`/admin/dishes/${dishId}`, 'DELETE');
+    
+    const message = result.soft_delete ? 
+      '✅ Блюдо скрыто (есть в заказах)' : 
+      '✅ Блюдо удалено';
+    
+    editSafeMessage(chatId, messageId, message, dishesMenu);
+    
+  } catch (error) {
+    editSafeMessage(chatId, messageId, `❌ Ошибка удаления: ${error.message}`, dishesMenu);
+  }
+});
 
-function showOrdersManagement(chatId) {
-  bot.sendMessage(chatId,
-    '📦 *УПРАВЛЕНИЕ ЗАКАЗАМИ*\n\n' +
-    'Выберите статус заказов:',
-    ordersManagementMenu
+// ==================== ORDER FUNCTIONS ====================
+
+function showOrdersSection(chatId) {
+  sendSafeMessage(chatId,
+    '📦 УПРАВЛЕНИЕ ЗАКАЗАМИ\n\n' +
+    'Выберите статус:',
+    ordersMenu
   );
 }
 
-async function showOrdersByStatus(chatId, status, messageId = null) {
+async function showNewOrders(chatId, messageId = null) {
   try {
-    const orders = await callAPI('/admin/orders?status=pending&limit=5');
+    // Пробуем получить заказы
+    const orders = await apiRequest('/admin/orders?status=pending&limit=5');
     
     if (!orders || orders.length === 0) {
-      const statusText = getStatusText(status);
-      return updateOrSend(chatId, messageId,
-        `😔 ${statusText} заказов нет.`,
-        ordersManagementMenu
-      );
+      const message = '😔 Новых заказов нет';
+      if (messageId) {
+        return editSafeMessage(chatId, messageId, message, ordersMenu);
+      }
+      return sendSafeMessage(chatId, message, ordersMenu);
     }
     
-    let message = `${getStatusEmoji(status)} *${getStatusText(status).toUpperCase()} ЗАКАЗЫ*\n\n`;
+    let message = '🆕 НОВЫЕ ЗАКАЗЫ\n\n';
+    let keyboard = [];
     
-    orders.forEach((order, index) => {
+    orders.forEach(order => {
       message += 
-        `📦 *Заказ #${order.id}*\n` +
-        `👤 ${order.user_name || 'Клиент'}\n` +
-        `🏪 ${order.restaurant_name}\n` +
-        `💰 ${order.total_amount} ₽\n` +
-        `📍 ${order.delivery_address.substring(0, 30)}...\n`;
+        `Заказ #${order.id}\n` +
+        `Клиент: ${order.user_name || 'Не указано'}\n` +
+        `Ресторан: ${order.restaurant_name}\n` +
+        `Сумма: ${order.total_amount} ₽\n` +
+        `Адрес: ${order.delivery_address.substring(0, 30)}...\n`;
       
-      // Кратко о блюдах
       if (order.items && order.items.length > 0) {
-        const firstItem = order.items[0];
-        message += `🍽️ ${firstItem.dish_name} x${firstItem.quantity}`;
-        if (order.items.length > 1) {
-          message += ` + еще ${order.items.length - 1}`;
-        }
-        message += '\n';
+        const item = order.items[0];
+        message += `Блюдо: ${item.dish_name} x${item.quantity}\n`;
       }
       
       message += `---\n`;
+      
+      keyboard.push([
+        { 
+          text: `📦 #${order.id} - ${order.total_amount} ₽`, 
+          callback_data: `view_order_${order.id}`
+        }
+      ]);
     });
     
-    // Создаем клавиатуру с заказами
-    let ordersKeyboard = orders.map(order => [
-      { text: `📦 #${order.id} - ${order.total_amount} ₽`, 
-        callback_data: `order_view_${order.id}` }
-    ]);
+    keyboard.push([{ text: '🏠 Главное меню', callback_data: 'main_menu' }]);
     
-    ordersKeyboard.push([{ text: '🔙 Назад', callback_data: 'main_menu' }]);
+    const replyMarkup = { reply_markup: { inline_keyboard: keyboard } };
     
-    const keyboard = { reply_markup: { inline_keyboard: ordersKeyboard } };
-    
-    updateOrSend(chatId, messageId, message, keyboard);
+    if (messageId) {
+      editSafeMessage(chatId, messageId, message, replyMarkup);
+    } else {
+      sendSafeMessage(chatId, message, replyMarkup);
+    }
     
   } catch (error) {
-    console.error('Orders error:', error.message);
-    updateOrSend(chatId, messageId,
-      '❌ Ошибка загрузки заказов.\nПроверьте API эндпоинт /admin/orders',
-      ordersManagementMenu
-    );
+    console.log('Orders error:', error.message);
+    const errorMsg = '❌ Ошибка загрузки заказов. Проверьте API эндпоинт.';
+    if (messageId) {
+      editSafeMessage(chatId, messageId, errorMsg, ordersMenu);
+    } else {
+      sendSafeMessage(chatId, errorMsg, ordersMenu);
+    }
   }
 }
 
-async function handleOrderAction(chatId, actionData, messageId = null) {
-  const [_, orderId] = actionData.split('_').slice(2);
+// Просмотр деталей заказа
+bot.on('callback_query', async (callbackQuery) => {
+  const data = callbackQuery.data;
   
-  // Пока просто показываем детали заказа
+  if (!data.startsWith('view_order_')) return;
+  
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const orderId = data.replace('view_order_', '');
+  
+  await bot.answerCallbackQuery(callbackQuery.id);
+  
   try {
-    const orders = await callAPI('/admin/orders');
+    const orders = await apiRequest('/admin/orders');
     const order = orders.find(o => o.id == orderId);
     
     if (!order) {
-      return updateOrSend(chatId, messageId,
-        '❌ Заказ не найден',
-        ordersManagementMenu
-      );
+      return editSafeMessage(chatId, messageId, '❌ Заказ не найден', ordersMenu);
     }
     
     let message = 
-      `📦 *ЗАКАЗ #${order.id}*\n\n` +
-      `👤 Клиент: ${order.user_name || 'Не указано'}\n` +
-      `📞 Телефон: ${order.user_phone || 'Не указано'}\n` +
-      `🏪 Ресторан: ${order.restaurant_name}\n` +
-      `📍 Адрес: ${order.delivery_address}\n` +
-      `📊 Статус: ${getStatusEmoji(order.status)} ${getStatusText(order.status)}\n` +
-      `💰 Сумма: ${order.total_amount} ₽\n\n` +
-      `🍽️ Состав:\n`;
+      `📦 ЗАКАЗ #${order.id}\n\n` +
+      `Клиент: ${order.user_name || 'Не указано'}\n` +
+      `Телефон: ${order.user_phone || 'Не указано'}\n` +
+      `Ресторан: ${order.restaurant_name}\n` +
+      `Адрес: ${order.delivery_address}\n` +
+      `Статус: ${order.status}\n` +
+      `Сумма: ${order.total_amount} ₽\n` +
+      `Оплата: ${order.payment_method}\n` +
+      `Время: ${new Date(order.order_date).toLocaleString()}\n\n` +
+      `Состав заказа:\n`;
     
     if (order.items && order.items.length > 0) {
       order.items.forEach(item => {
@@ -615,165 +657,103 @@ async function handleOrderAction(chatId, actionData, messageId = null) {
       });
     }
     
-    // Кнопки управления в зависимости от статуса
+    // Кнопки управления
     let inlineKeyboard = [];
     
     if (order.status === 'pending') {
       inlineKeyboard.push([
-        { text: '✅ Подтвердить', callback_data: `order_action_confirm_${order.id}` },
-        { text: '❌ Отменить', callback_data: `order_action_cancel_${order.id}` }
-      ]);
-    } else if (order.status === 'confirmed') {
-      inlineKeyboard.push([
-        { text: '👨‍🍳 В готовку', callback_data: `order_action_prepare_${order.id}` }
+        { text: '✅ Подтвердить', callback_data: `confirm_order_${order.id}` },
+        { text: '❌ Отменить', callback_data: `cancel_order_${order.id}` }
       ]);
     }
     
     inlineKeyboard.push([
-      { text: '📦 Все заказы', callback_data: 'orders_new' },
+      { text: '📦 Все заказы', callback_data: 'new_orders' },
       { text: '🏠 Главное меню', callback_data: 'main_menu' }
     ]);
     
     const keyboard = { reply_markup: { inline_keyboard: inlineKeyboard } };
     
-    updateOrSend(chatId, messageId, message, keyboard);
+    editSafeMessage(chatId, messageId, message, keyboard);
     
   } catch (error) {
-    updateOrSend(chatId, messageId,
-      `❌ Ошибка: ${error.message}`,
-      ordersManagementMenu
-    );
+    editSafeMessage(chatId, messageId, `❌ Ошибка: ${error.message}`, ordersMenu);
   }
-}
+});
 
-// ==================== ADMIN PANEL FUNCTIONS ====================
-
-function showAdminPanel(chatId) {
-  bot.sendMessage(chatId,
-    '⚙️ *АДМИН-ПАНЕЛЬ*\n\n' +
-    'Системные функции:',
-    adminPanelMenu
-  );
-}
-
-async function showSystemStats(chatId, messageId = null) {
-  try {
-    const health = await callAPI('/health');
-    const orders = await callAPI('/admin/orders?limit=1');
-    const restaurants = await callAPI('/restaurants');
-    
-    const message = 
-      '📈 *СИСТЕМНАЯ СТАТИСТИКА*\n\n' +
-      `🚀 API: ${health.status}\n` +
-      `🗄️ База: ${health.database}\n` +
-      `📦 Заказов: ${orders?.length || 0}\n` +
-      `🏪 Ресторанов: ${restaurants?.length || 0}\n` +
-      `⏰ Время: ${new Date().toLocaleTimeString()}\n\n` +
-      `🔗 ${API_BASE_URL}`;
-    
-    updateOrSend(chatId, messageId, message, adminPanelMenu);
-    
-  } catch (error) {
-    updateOrSend(chatId, messageId,
-      '❌ Ошибка загрузки статистики',
-      adminPanelMenu
-    );
-  }
-}
-
-function showAccessInfo(chatId, messageId = null) {
-  const message = 
-    '👥 *УПРАВЛЕНИЕ ДОСТУПОМ*\n\n' +
-    `Текущие администраторы:\n${ADMIN_USERS.join('\n') || 'Все пользователи'}\n\n` +
-    'Для изменения добавьте переменную ADMIN_USERS в Railway.';
+// Подтверждение заказа
+bot.on('callback_query', async (callbackQuery) => {
+  const data = callbackQuery.data;
   
-  updateOrSend(chatId, messageId, message, adminPanelMenu);
-}
+  if (!data.startsWith('confirm_order_')) return;
+  
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const orderId = data.replace('confirm_order_', '');
+  
+  await bot.answerCallbackQuery(callbackQuery.id);
+  
+  try {
+    const result = await apiRequest(`/admin/orders/${orderId}/status`, 'PUT', {
+      status: 'confirmed'
+    });
+    
+    editSafeMessage(chatId, messageId, 
+      `✅ Заказ #${orderId} подтвержден!\n\n` +
+      `Статус изменен на "подтвержден".`,
+      ordersMenu
+    );
+    
+  } catch (error) {
+    editSafeMessage(chatId, messageId, 
+      `❌ Ошибка подтверждения: ${error.message}`,
+      ordersMenu
+    );
+  }
+});
 
-// ==================== HELPER FUNCTIONS ====================
+// ==================== OTHER FUNCTIONS ====================
 
 function showMainMenu(chatId, messageId = null) {
   if (messageId) {
-    bot.editMessageText('👑 *АДМИНИСТРАТИВНАЯ ПАНЕЛЬ*\n\nВыберите раздел:', {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'Markdown',
-      reply_markup: adminMainMenu.reply_markup
-    }).catch(err => {
-      bot.sendMessage(chatId, '👑 Админ-панель:', adminMainMenu);
-    });
+    editSafeMessage(chatId, messageId, '👑 АДМИН ПАНЕЛЬ\n\nВыберите раздел:', adminMainMenu);
   } else {
-    bot.sendMessage(chatId, '👑 Админ-панель:', adminMainMenu);
+    sendSafeMessage(chatId, '👑 Админ панель:', adminMainMenu);
   }
 }
 
 async function showStatistics(chatId) {
   try {
-    const orders = await callAPI('/admin/orders');
-    const restaurants = await callAPI('/restaurants');
+    const orders = await apiRequest('/admin/orders');
+    const restaurants = await apiRequest('/restaurants');
+    const health = await apiRequest('/health');
     
-    let totalDishes = 0;
-    for (const restaurant of restaurants) {
-      try {
-        const menu = await callAPI(`/restaurants/${restaurant.id}/menu`);
-        totalDishes += menu?.length || 0;
-      } catch (error) {
-        // Пропускаем
-      }
-    }
+    const pendingOrders = orders ? orders.filter(o => o.status === 'pending').length : 0;
     
     const message = 
-      '📊 *СТАТИСТИКА СИСТЕМЫ*\n\n' +
-      `📦 Всего заказов: ${orders?.length || 0}\n` +
-      `🆕 Новых (pending): ${orders?.filter(o => o.status === 'pending').length || 0}\n` +
-      `🏪 Ресторанов: ${restaurants.length}\n` +
-      `🍽️ Блюд: ${totalDishes}\n\n` +
-      `🔄 ${new Date().toLocaleTimeString()}`;
+      '📊 СТАТИСТИКА СИСТЕМЫ\n\n' +
+      `Заказов всего: ${orders?.length || 0}\n` +
+      `Новых заказов: ${pendingOrders}\n` +
+      `Ресторанов: ${restaurants?.length || 0}\n` +
+      `Статус API: ${health?.status || 'недоступен'}\n` +
+      `База данных: ${health?.database || 'неизвестно'}\n\n` +
+      `Обновлено: ${new Date().toLocaleTimeString()}`;
     
-    bot.sendMessage(chatId, message, adminMainMenu);
+    sendSafeMessage(chatId, message, adminMainMenu);
     
   } catch (error) {
-    bot.sendMessage(chatId, '❌ Ошибка статистики', adminMainMenu);
+    sendSafeMessage(chatId, '❌ Ошибка загрузки статистики', adminMainMenu);
   }
 }
 
-function showHelp(chatId) {
-  const message = 
-    '🆘 *ПОМОЩЬ АДМИНИСТРАТОРУ*\n\n' +
-    '*Основные разделы:*\n' +
-    '• 🍽️ Блюда - управление меню\n' +
-    '• 📦 Заказы - подтверждение и отслеживание\n' +
-    '• 📊 Статистика - общая информация\n' +
-    '• ⚙️ Админ-панель - системные настройки\n\n' +
-    '*Быстрые команды:*\n' +
-    '/start - Главное меню\n' +
-    '/help - Эта справка';
-  
-  bot.sendMessage(chatId, message, adminMainMenu);
-}
-
-function getStatusEmoji(status) {
-  const emojis = {
-    'pending': '🆕',
-    'confirmed': '✅',
-    'preparing': '👨‍🍳',
-    'delivering': '🚚',
-    'delivered': '🎉',
-    'cancelled': '❌'
-  };
-  return emojis[status] || '📦';
-}
-
-function getStatusText(status) {
-  const texts = {
-    'pending': 'Новые',
-    'confirmed': 'Подтвержденные',
-    'preparing': 'В готовке',
-    'delivering': 'В доставке',
-    'delivered': 'Доставленные',
-    'cancelled': 'Отмененные'
-  };
-  return texts[status] || status;
+function showAdminPanel(chatId) {
+  sendSafeMessage(chatId,
+    '⚙️ АДМИН ПАНЕЛЬ\n\n' +
+    `API: ${API_BASE_URL}\n` +
+    `Админы: ${ADMIN_USERS.join(', ') || 'Все'}\n` +
+    `Время: ${new Date().toLocaleString()}`,
+    adminMainMenu
+  );
 }
 
 // ==================== ERROR HANDLING ====================
@@ -791,19 +771,19 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
-      service: 'admin-bot-fixed',
+      service: 'admin-bot-safe',
       timestamp: new Date().toISOString()
     }));
   } else {
     res.writeHead(200);
-    res.end('🤖 Admin Bot v2.0 Fixed');
+    res.end('🤖 Admin Bot Safe');
   }
 });
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`✅ Health server: ${PORT}`);
-  console.log('🎉 Fixed bot is ready!');
+  console.log('🎉 Safe bot is ready!');
 });
 
 process.on('SIGTERM', () => {
