@@ -5,6 +5,20 @@ const http = require('http');
 
 console.log('🚀 ADMIN BOT FINAL Starting...');
 
+// ==================== STATE CONFIG ====================
+const STATE_TIMEOUT = 5 * 60 * 1000; // 5 минут
+
+// Функция для очистки устаревших состояний
+setInterval(() => {
+    const now = Date.now();
+    for (const [chatId, state] of Object.entries(userStates)) {
+        if (state.timestamp && (now - state.timestamp > STATE_TIMEOUT)) {
+            console.log(`⏰ Очистка устаревшего состояния для ${chatId}`);
+            delete userStates[chatId];
+        }
+    }
+}, 60000); // Проверяем каждую минуту
+
 // ==================== CONFIG ====================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
@@ -162,6 +176,7 @@ function getDishActions(dishId, isAvailable) {
         ],
         [
           { text: '📋 Все блюда', callback_data: 'all_dishes' },
+          { text: '⬅️ Назад', callback_data: 'all_dishes' },
           { text: '🏠 Главное меню', callback_data: 'main_menu' }
         ]
       ]
@@ -292,27 +307,46 @@ bot.on('callback_query', async (callbackQuery) => {
     
     // Обработка callback
     if (data === 'main_menu') {
+        delete userStates[chatId]; // Очищаем состояние
         showMainMenu(chatId, messageId);
     } else if (data === 'all_dishes') {
+        delete userStates[chatId]; // Очищаем состояние
         showAllDishes(chatId, messageId);
     } else if (data === 'create_dish') {
-        // ЗАМЕНИТЕ ЭТУ СТРОКУ:
-        // showCreateDishInfo(chatId, messageId); // Старый код
-        startCreateDishFlow(chatId, messageId); // Новый код
+        startCreateDishFlow(chatId, messageId);
+    } else if (data === 'cancel_create') {
+        delete userStates[chatId]; // Очищаем состояние
+        editMessage(chatId, messageId, 
+            '❌ Создание блюда отменено.',
+            dishesMenu
+        );
     } else if (data === 'find_dish') {
         editMessage(chatId, messageId,
             '🔍 ПОИСК БЛЮДА\n\n' +
             'Введите ID блюда:',
-            { reply_markup: { inline_keyboard: [[{ text: '❌ Отмена', callback_data: 'main_menu' }]] } }
+            { reply_markup: { inline_keyboard: [[
+                { text: '❌ Отмена', callback_data: 'all_dishes' }
+            ]] } }
         );
     } else if (data.startsWith('toggle_dish_')) {
         const dishId = data.replace('toggle_dish_', '');
         toggleDishStatus(chatId, dishId, messageId);
     } else if (data.startsWith('edit_dish_')) {
         const dishId = data.replace('edit_dish_', '');
-        // ЗАМЕНИТЕ ЭТУ СТРОКУ:
-        // showDishDetails(chatId, dishId, messageId); // Старый код
-        startEditDishFlow(chatId, dishId, messageId); // Новый код
+        // Если уже в процессе редактирования - показываем информацию
+        if (userStates[chatId] && userStates[chatId].action === 'edit_dish') {
+            await showDishDetails(chatId, dishId, messageId);
+        } else {
+            startEditDishFlow(chatId, dishId, messageId);
+        }
+    } else if (data.startsWith('cancel_edit_')) {
+        const dishId = data.replace('cancel_edit_', '');
+        delete userStates[chatId]; // Очищаем состояние
+        
+        editMessage(chatId, messageId, 
+            '❌ Редактирование отменено.',
+            getDishActions(dishId, true)
+        );
     } else if (data.startsWith('delete_dish_')) {
         const dishId = data.replace('delete_dish_', '');
         confirmDeleteDish(chatId, dishId, messageId);
@@ -554,13 +588,19 @@ async function startCreateDishFlow(chatId, messageId = null) {
         'Описание: Классическая пицца\n' +
         'Время готовки: 25\n' +
         'Острое: нет\n' +
-        'Вегетарианское: да';
+        'Вегетарианское: да\n\n' +
+        '⚠️ Для отмены нажмите кнопку ниже:';
 
     const keyboard = {
         reply_markup: {
-            inline_keyboard: [[
-                { text: '❌ Отмена', callback_data: 'all_dishes' }
-            ]]
+            inline_keyboard: [
+                [
+                    { text: '❌ Отменить создание', callback_data: 'cancel_create' }
+                ],
+                [
+                    { text: '📋 Все блюда', callback_data: 'all_dishes' }
+                ]
+            ]
         }
     };
 
@@ -572,9 +612,10 @@ async function startCreateDishFlow(chatId, messageId = null) {
     
     // Сохраняем состояние для этого пользователя
     userStates[chatId] = {
-        action: 'create_dish',
-        step: 'waiting_for_data'
-    };
+    action: 'create_dish',
+    step: 'waiting_for_data',
+    timestamp: Date.now()
+  };
 }
 
 async function handleCreateDishData(chatId, text, messageId = null) {
@@ -681,13 +722,19 @@ async function startEditDishFlow(chatId, dishId, messageId = null) {
             'Пример изменения:\n' +
             'Название: Новая пицца\n' +
             'Цена: 799\n' +
-            'Описание: Обновленное описание';
+            'Описание: Обновленное описание\n\n' +
+            '⚠️ Для отмены нажмите кнопку ниже:';
         
         const keyboard = {
             reply_markup: {
-                inline_keyboard: [[
-                    { text: '❌ Отмена', callback_data: `edit_dish_${dishId}` }
-                ]]
+                inline_keyboard: [
+                    [
+                        { text: '❌ Отменить редактирование', callback_data: `cancel_edit_${dishId}` }
+                    ],
+                    [
+                        { text: '👁️ Просмотреть блюдо', callback_data: `edit_dish_${dishId}` }
+                    ]
+                ]
             }
         };
         
@@ -698,11 +745,12 @@ async function startEditDishFlow(chatId, dishId, messageId = null) {
         }
         
         // Сохраняем состояние для редактирования
-        userStates[chatId] = {
-            action: 'edit_dish',
-            dishId: dishId,
-            step: 'waiting_for_data'
-        };
+            userStates[chatId] = {
+              action: 'edit_dish',
+              dishId: dishId,
+              step: 'waiting_for_data',
+              timestamp: Date.now()
+            };
         
     } catch (error) {
         console.error('Start edit error:', error.message);
@@ -1003,6 +1051,91 @@ function showHelp(chatId) {
   
   sendMessage(chatId, message, adminMainMenu);
 }
+
+// ==================== STATE MANAGEMENT ====================
+
+function clearUserState(chatId) {
+    if (userStates[chatId]) {
+        console.log(`🧹 Очищенное состояние для ${chatId}:`, userStates[chatId]);
+        delete userStates[chatId];
+    }
+}
+
+// Обновите обработку обычных сообщений, чтобы очищать состояние при неверном вводе
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    
+    if (!isAdminUser(chatId) || !text || text.startsWith('/')) return;
+    
+    console.log(`💬 Message: ${chatId} -> ${text}`);
+    
+    // Проверяем состояние пользователя
+    const state = userStates[chatId];
+    
+    if (state) {
+        // Проверяем, не пытается ли пользователь отменить ввод командой
+        if (text.toLowerCase() === 'отмена' || text.toLowerCase() === 'cancel') {
+            clearUserState(chatId);
+            sendMessage(chatId, '❌ Операция отменена.', dishesMenu);
+            return;
+        }
+        
+        // Пользователь находится в процессе создания/редактирования
+        if (state.action === 'create_dish' && state.step === 'waiting_for_data') {
+            handleCreateDishData(chatId, text);
+            return;
+        }
+        
+        if (state.action === 'edit_dish' && state.step === 'waiting_for_data') {
+            handleEditDishData(chatId, text);
+            return;
+        }
+    }
+    
+    // Существующая логика меню
+    switch(text) {
+        case '🍽️ Блюда':
+            clearUserState(chatId);
+            showDishesSection(chatId);
+            break;
+        case '📦 Заказы':
+            clearUserState(chatId);
+            showOrdersSection(chatId);
+            break;
+        case '📊 Статистика':
+            clearUserState(chatId);
+            showStatistics(chatId);
+            break;
+        case '⚙️ Админ':
+            clearUserState(chatId);
+            showAdminInfo(chatId);
+            break;
+        case '🆘 Помощь':
+            clearUserState(chatId);
+            showHelp(chatId);
+            break;
+        case 'Отмена':
+        case 'отмена':
+            clearUserState(chatId);
+            sendMessage(chatId, '❌ Операция отменена. Возврат в главное меню.', adminMainMenu);
+            break;
+        default:
+            // Если введен ID блюда
+            if (/^\d+$/.test(text)) {
+                clearUserState(chatId);
+                showDishDetails(chatId, parseInt(text));
+            } else {
+                // Если неизвестная команда и пользователь в состоянии - предлагаем отменить
+                if (state) {
+                    sendMessage(chatId, 
+                        '⚠️ Вы находитесь в процессе создания/редактирования.\n' +
+                        'Введите данные по формату или напишите "отмена".'
+                    );
+                }
+            }
+    }
+});
 
 // ==================== HEALTH SERVER ====================
 const server = http.createServer((req, res) => {
