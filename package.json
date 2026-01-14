@@ -1,8 +1,8 @@
 {
   "name": "food-delivery-admin-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for food delivery administration",
-  "main": "bot-with-menu.js",
+  "description": "Admin bot for food delivery",
+  "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
