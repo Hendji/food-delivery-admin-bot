@@ -486,7 +486,16 @@ bot.on('callback_query', async (callbackQuery) => {
 
 // ==================== ORDER FUNCTIONS ====================
 
-// ==================== ORDER FUNCTIONS ====================
+// Показать раздел заказов
+function showOrdersSection(chatId, messageId = null) {
+    const message = '📦 УПРАВЛЕНИЕ ЗАКАЗАМИ\n\nВыберите тип заказов:';
+    
+    if (messageId) {
+        editMessage(chatId, messageId, message, ordersMenu);
+    } else {
+        sendMessage(chatId, message, ordersMenu);
+    }
+}
 
 async function showOrdersByStatus(chatId, messageId = null, status) {
   try {
