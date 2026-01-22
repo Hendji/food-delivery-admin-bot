@@ -486,45 +486,23 @@ bot.on('callback_query', async (callbackQuery) => {
 
 // ==================== ORDER FUNCTIONS ====================
 
-function showOrdersSection(chatId, messageId = null) {
-  const message = 
-    '📦 УПРАВЛЕНИЕ ЗАКАЗАМИ\n\n' +
-    'Выберите статус заказов для просмотра:';
-  
-  if (messageId) {
-    editMessage(chatId, messageId, message, ordersMenu);
-  } else {
-    sendMessage(chatId, message, ordersMenu);
-  }
-}
+// ==================== ORDER FUNCTIONS ====================
 
 async function showOrdersByStatus(chatId, messageId = null, status) {
   try {
-    // Получаем заказы с сервера
-    let orders = [];
-    try {
-      // Если есть API для получения заказов
-      const result = await apiRequest('/users/me/orders');
-      if (result && result.orders) {
-        orders = result.orders;
-      }
-    } catch (error) {
-      console.log('API orders not available, using mock data');
+    // Получаем заказы с сервера через бот эндпоинт
+    const result = await apiRequest('/bot/orders');
+    
+    if (!result.success || !result.orders) {
+      throw new Error('Не удалось получить заказы');
     }
     
     // Фильтруем заказы по статусу
     let filteredOrders = [];
     if (Array.isArray(status)) {
-      filteredOrders = orders.filter(order => status.includes(order.status));
+      filteredOrders = result.orders.filter(order => status.includes(order.status));
     } else {
-      filteredOrders = orders.filter(order => order.status === status);
-    }
-    
-    // Если нет реальных данных, используем мок
-    if (filteredOrders.length === 0) {
-      filteredOrders = getMockOrders().filter(order => 
-        Array.isArray(status) ? status.includes(order.status) : order.status === status
-      );
+      filteredOrders = result.orders.filter(order => order.status === status);
     }
     
     if (filteredOrders.length === 0) {
@@ -549,7 +527,7 @@ async function showOrdersByStatus(chatId, messageId = null, status) {
         `🏠 ${order.delivery_address.substring(0, 30)}...\n` +
         `🍽️ ${order.restaurant_name || 'Ресторан'}\n` +
         `💰 ${order.total_amount} ₽\n` +
-        `⏰ ${new Date(order.order_date || order.createdAt).toLocaleString('ru-RU')}\n`;
+        `⏰ ${new Date(order.order_date).toLocaleString('ru-RU')}\n`;
       
       if (order.items && order.items.length > 0) {
         const item = order.items[0];
@@ -605,21 +583,14 @@ async function showOrdersByStatus(chatId, messageId = null, status) {
 
 async function showOrderDetails(chatId, orderId, messageId = null) {
   try {
-    // Пытаемся получить заказ с сервера
-    let order = null;
-    try {
-      const result = await apiRequest('/users/me/orders');
-      if (result && result.orders) {
-        order = result.orders.find(o => o.id == orderId);
-      }
-    } catch (error) {
-      console.log('API order not available, using mock data');
+    // Получаем заказ с сервера через бот эндпоинт
+    const result = await apiRequest(`/bot/orders/${orderId}`);
+    
+    if (!result.success || !result.order) {
+      throw new Error(`Заказ #${orderId} не найден`);
     }
     
-    // Если нет реальных данных, используем мок
-    if (!order) {
-      order = getMockOrders().find(o => o.id == orderId) || getMockOrder(orderId);
-    }
+    const order = result.order;
     
     let message = 
       `<b>📦 ДЕТАЛИ ЗАКАЗА #${order.id}</b>\n\n` +
@@ -627,7 +598,7 @@ async function showOrderDetails(chatId, orderId, messageId = null) {
       `<b>📞 Телефон:</b> ${order.customer_phone || 'Не указано'}\n` +
       `<b>🏠 Адрес доставки:</b>\n${order.delivery_address}\n\n` +
       `<b>🍽️ Ресторан:</b> ${order.restaurant_name || 'Наетый кабан'}\n` +
-      `<b>⏰ Время заказа:</b> ${new Date(order.order_date || order.createdAt).toLocaleString('ru-RU')}\n` +
+      `<b>⏰ Время заказа:</b> ${new Date(order.order_date).toLocaleString('ru-RU')}\n` +
       `<b>💰 Сумма:</b> ${order.total_amount} ₽\n` +
       `<b>💳 Оплата:</b> ${order.payment_method || 'Картой онлайн'}\n` +
       `<b>📊 Статус:</b> ${getStatusText(order.status)}\n\n`;
@@ -635,8 +606,8 @@ async function showOrderDetails(chatId, orderId, messageId = null) {
     if (order.items && order.items.length > 0) {
       message += `<b>🍴 Состав заказа:</b>\n`;
       order.items.forEach((item, index) => {
-        const totalPrice = (item.dish_price || item.price || 0) * (item.quantity || 1);
-        message += `${index + 1}. ${item.dish_name || item.name || 'Блюдо'} x${item.quantity || 1} - ${totalPrice} ₽\n`;
+        const totalPrice = (item.dish_price || 0) * (item.quantity || 1);
+        message += `${index + 1}. ${item.dish_name || 'Блюдо'} x${item.quantity || 1} - ${totalPrice} ₽\n`;
       });
     }
     
@@ -661,18 +632,17 @@ async function showOrderDetails(chatId, orderId, messageId = null) {
 
 async function updateOrderStatus(chatId, orderId, newStatus, messageId = null) {
   try {
-    // Пытаемся обновить статус через API
-    try {
-      await apiRequest(`/admin/orders/${orderId}/status`, 'PUT', { status: newStatus });
-    } catch (error) {
-      console.log('API update not available, using mock update');
+    // Обновляем статус через бот эндпоинт
+    const result = await apiRequest(`/bot/orders/${orderId}/status`, 'PUT', { 
+      status: newStatus 
+    });
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Ошибка обновления статуса');
     }
     
     const statusText = getStatusText(newStatus);
     const message = `✅ Статус заказа #${orderId} изменен на "${statusText}"`;
-    
-    // Отправляем уведомление пользователю о изменении статуса
-    notifyOrderStatusUpdate(orderId, newStatus);
     
     if (messageId) {
       editMessage(chatId, messageId, message, ordersMenu);
