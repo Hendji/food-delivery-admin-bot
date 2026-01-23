@@ -946,7 +946,16 @@ async function handleCreateDishData(chatId, text) {
             dishData.name = value;
             break;
           case 'цена':
-            dishData.price = parseFloat(value);
+            const priceValue = value.replace(',', '.').trim();
+            dishData.price = parseFloat(priceValue);
+            
+            // Проверка, что цена валидна
+            if (isNaN(dishData.price) || dishData.price <= 0) {
+              return sendMessage(chatId,
+                `❌ Ошибка: некорректная цена "${value}". Введите число (например: 450 или 450.50)`,
+                dishesMenu
+              );
+            }
             break;
           case 'описание':
             dishData.description = value;
