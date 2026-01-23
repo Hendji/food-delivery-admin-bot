@@ -946,16 +946,9 @@ async function handleCreateDishData(chatId, text) {
             dishData.name = value;
             break;
           case 'цена':
+            // Заменяем запятую на точку и парсим
             const priceValue = value.replace(',', '.').trim();
-            dishData.price = parseFloat(priceValue);
-            
-            // Проверка, что цена валидна
-            if (isNaN(dishData.price) || dishData.price <= 0) {
-              return sendMessage(chatId,
-                `❌ Ошибка: некорректная цена "${value}". Введите число (например: 450 или 450.50)`,
-                dishesMenu
-              );
-            }
+            dishData.price = priceValue; // Сохраняем как строку, парсим на сервере
             break;
           case 'описание':
             dishData.description = value;
@@ -972,15 +965,15 @@ async function handleCreateDishData(chatId, text) {
         }
       }
     }
-    
+
     // Валидация
     if (!dishData.name || !dishData.price) {
-      return sendMessage(chatId, 
+      return sendMessage(chatId,
         '❌ Ошибка: укажите как минимум название и цену блюда',
         dishesMenu
       );
     }
-    
+
     // Получаем рестораны
     let restaurants = [];
     try {
@@ -988,24 +981,24 @@ async function handleCreateDishData(chatId, text) {
     } catch (error) {
       console.log('API restaurants not available, using mock');
     }
-    
+
     if (restaurants && restaurants.length > 0) {
       const restaurant = restaurants[0];
       dishData.restaurant_id = restaurant.id;
     } else {
       dishData.restaurant_id = 1; // Mock restaurant ID
     }
-    
+
     // Отправляем запрос на создание
     try {
       const result = await apiRequest('/admin/dishes', 'POST', dishData);
       
-      const successMessage = 
+      const successMessage =
         `✅ Блюдо успешно создано!\n\n` +
         `<b>Название:</b> ${result.dish.name}\n` +
         `<b>Цена:</b> ${result.dish.price} ₽\n` +
         `<b>ID:</b> ${result.dish.id}`;
-        
+      
       sendMessage(chatId, successMessage, {
         reply_markup: {
           inline_keyboard: [[
@@ -1016,24 +1009,22 @@ async function handleCreateDishData(chatId, text) {
       });
       
     } catch (error) {
-      console.error('Create dish API error:', error.message);
-      // Даже если API не работает, показываем успех в мок-режиме
-      const mockDishId = Date.now();
-      const successMessage = 
-        `✅ Блюдо создано (тестовый режим)!\n\n` +
-        `<b>Название:</b> ${dishData.name}\n` +
-        `<b>Цена:</b> ${dishData.price} ₽\n` +
-        `<b>ID:</b> ${mockDishId}`;
-        
-      sendMessage(chatId, successMessage, dishesMenu);
+      console.error('Create dish API error:', error.response?.data || error.message);
+      
+      let errorMessage = '❌ Ошибка создания блюда';
+      if (error.response?.data?.error) {
+        errorMessage += `: ${error.response.data.error}`;
+      }
+      
+      sendMessage(chatId, errorMessage, dishesMenu);
     }
-    
+
     // Очищаем состояние
     delete userStates[chatId];
     
   } catch (error) {
     console.error('Create dish error:', error.message);
-    sendMessage(chatId, 
+    sendMessage(chatId,
       `❌ Ошибка создания блюда: ${error.message}`,
       dishesMenu
     );
