@@ -1104,11 +1104,11 @@ async function handleEditDishData(chatId, text) {
     if (!state || state.action !== 'edit_dish') {
       return sendMessage(chatId, '❌ Сессия истекла. Начните редактирование заново.', dishesMenu);
     }
-    
+
     const dishId = state.dishId;
     const lines = text.split('\n');
     const updates = {};
-    
+
     for (const line of lines) {
       if (line.includes(':')) {
         const [key, value] = line.split(':').map(s => s.trim());
@@ -1119,13 +1119,14 @@ async function handleEditDishData(chatId, text) {
             updates.name = value;
             break;
           case 'цена':
-            updates.price = parseFloat(value);
+            // Сохраняем как строку, сервер сам распарсит
+            updates.price = value;
             break;
           case 'описание':
             updates.description = value;
             break;
           case 'время готовки':
-            updates.preparation_time = parseInt(value);
+            updates.preparation_time = value;
             break;
           case 'острое':
             updates.is_spicy = value.toLowerCase() === 'да';
@@ -1136,48 +1137,182 @@ async function handleEditDishData(chatId, text) {
         }
       }
     }
-    
+
     // Если ничего не изменилось
     if (Object.keys(updates).length === 0) {
-      return sendMessage(chatId, 
+      return sendMessage(chatId,
         '⚠️ Не указаны изменения. Блюдо не изменено.',
         getDishActions(dishId, true)
       );
     }
-    
+
+    console.log('📤 Отправка обновлений:', { dishId, updates });
+
     // Отправляем запрос на обновление
     try {
-      await apiRequest(`/admin/dishes/${dishId}`, 'PUT', updates);
-    } catch (error) {
-      console.error('Edit dish API error:', error.message);
-      // В мок-режиме просто продолжаем
-    }
-    
-    const successMessage = 
-      `✅ Блюдо успешно обновлено!\n\n` +
-      `<b>Измененные поля:</b>\n${Object.keys(updates).map(k => `• ${k}`).join('\n')}`;
+      const result = await apiRequest(`/admin/dishes/${dishId}`, 'PUT', updates);
       
-    sendMessage(chatId, successMessage, {
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '📋 Все блюда', callback_data: 'all_dishes' },
-          { text: '👁️ Посмотреть', callback_data: `edit_dish_${dishId}` }
-        ]]
+      const successMessage =
+        `✅ Блюдо успешно обновлено!\n\n` +
+        `<b>Измененные поля:</b>\n${Object.keys(updates).map(k => `• ${k}`).join('\n')}`;
+      
+      sendMessage(chatId, successMessage, {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📋 Все блюда', callback_data: 'all_dishes' },
+            { text: '👁️ Посмотреть', callback_data: `edit_dish_${dishId}` }
+          ]]
+        }
+      });
+      
+    } catch (error) {
+      console.error('Edit dish API error:', error.response?.data || error.message);
+      
+      let errorMessage = '❌ Ошибка обновления блюда';
+      if (error.response?.data?.error) {
+        errorMessage += `: ${error.response.data.error}`;
       }
-    });
-    
+      
+      sendMessage(chatId, errorMessage, dishesMenu);
+    }
+
     // Очищаем состояние
     delete userStates[chatId];
     
   } catch (error) {
-    console.error('Edit dish error:', error.message);
-    sendMessage(chatId, 
+    console.error('Edit dish error:', error);
+    sendMessage(chatId,
       `❌ Ошибка редактирования блюда: ${error.message}`,
       dishesMenu
     );
     delete userStates[chatId];
   }
 }
+
+app.put('/admin/dishes/:id', async (req, res) => {
+  try {
+    if (!validateAdminApiKey(req)) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'Неверный API ключ' 
+      });
+    }
+
+    const dishId = req.params.id;
+    const updates = req.body;
+
+    // Валидация - хотя бы одно поле для обновления
+    if (!updates || Object.keys(updates).length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Нет данных для обновления' 
+      });
+    }
+
+    if (!isDatabaseConnected || !pool) {
+      return res.status(503).json({
+        success: false,
+        error: 'База данных недоступна'
+      });
+    }
+
+    // Собираем поля для обновления
+    const updateFields = [];
+    const updateValues = [];
+    let paramCount = 1;
+
+    if (updates.name !== undefined) {
+      updateFields.push(`name = $${paramCount++}`);
+      updateValues.push(updates.name);
+    }
+    
+    if (updates.description !== undefined) {
+      updateFields.push(`description = $${paramCount++}`);
+      updateValues.push(updates.description);
+    }
+    
+    if (updates.image_url !== undefined) {
+      updateFields.push(`image_url = $${paramCount++}`);
+      updateValues.push(updates.image_url);
+    }
+    
+    if (updates.price !== undefined) {
+      // Парсим цену
+      const parsedPrice = typeof updates.price === 'string' 
+        ? parseFloat(updates.price.replace(',', '.')) 
+        : parseFloat(updates.price);
+      
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Цена должна быть положительным числом'
+        });
+      }
+      
+      updateFields.push(`price = $${paramCount++}`);
+      updateValues.push(parsedPrice);
+    }
+    
+    if (updates.preparation_time !== undefined) {
+      updateFields.push(`preparation_time = $${paramCount++}`);
+      updateValues.push(parseInt(updates.preparation_time) || 30);
+    }
+    
+    if (updates.is_spicy !== undefined) {
+      updateFields.push(`is_spicy = $${paramCount++}`);
+      updateValues.push(Boolean(updates.is_spicy));
+    }
+    
+    if (updates.is_vegetarian !== undefined) {
+      updateFields.push(`is_vegetarian = $${paramCount++}`);
+      updateValues.push(Boolean(updates.is_vegetarian));
+    }
+    
+    if (updates.is_available !== undefined) {
+      updateFields.push(`is_available = $${paramCount++}`);
+      updateValues.push(Boolean(updates.is_available));
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Нет валидных полей для обновления' 
+      });
+    }
+
+    updateValues.push(dishId);
+    
+    const query = `
+      UPDATE dishes 
+      SET ${updateFields.join(', ')}
+      WHERE id = $${paramCount}
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, updateValues);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Блюдо не найдено' 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Блюдо успешно обновлено',
+      dish: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Ошибка обновления блюда:', error);
+    log(`❌ Ошибка обновления блюда: ${error.message}`);
+    res.status(500).json({ 
+      success: false,
+      error: 'Ошибка сервера при обновлении блюда'
+    });
+  }
+});
 
 async function confirmDeleteDish(chatId, dishId, messageId = null) {
   try {
